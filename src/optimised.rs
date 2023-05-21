@@ -44,7 +44,7 @@ pub fn optimised_fma(s: &Ciphertext, hint_pts: &[Plaintext], sec_len: usize) -> 
     let mut d_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
     for i in 0..sec_len {
-        dbg!(i);
+        // dbg!(i);
         fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_pts[i].poly_ntt_ref());
         fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_pts[i].poly_ntt_ref());
     }
@@ -101,10 +101,22 @@ mod tests {
 
         let mut ct = sk.encrypt(&pt, &mut rng);
         ct.change_representation(&Representation::Evaluation);
-        let pt_vec = vec![pt2; 257];
+        let pt_vec = vec![pt2; 512];
 
+        let now = std::time::Instant::now();
         let res_ct = optimised_fma(&ct, &pt_vec, pt_vec.len());
+        println!("time optimised: {:?}", now.elapsed());
+
+        // unoptimised fma
+        let now = std::time::Instant::now();
+        let mut res_ct2 = &ct * &pt_vec[0];
+        pt_vec.iter().skip(1).for_each(|c| {
+            res_ct2.fma_reverse_inplace(&ct, c);
+        });
+        println!("time un-optimised: {:?}", now.elapsed());
+
         let v = sk.decrypt(&res_ct).decode(Encoding::simd(0));
+        let v2 = sk.decrypt(&res_ct2).decode(Encoding::simd(0));
 
         params.plaintext_modulus_op.mul_mod_fast_vec(&mut m, &m2);
         params
@@ -112,5 +124,6 @@ mod tests {
             .scalar_mul_mod_fast_vec(&mut m, pt_vec.len() as u64);
 
         assert_eq!(v, m);
+        assert_eq!(v, v2);
     }
 }
