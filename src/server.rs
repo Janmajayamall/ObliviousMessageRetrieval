@@ -1,11 +1,12 @@
+use crate::pvw::{self, PvwCiphertext, PvwParameters};
 use bfv::{
-    BfvParameters, Ciphertext, Encoding, GaloisKey, Modulus, Plaintext, RelinearizationKey,
-    SecretKey,
+    BfvParameters, Ciphertext, Encoding, GaloisKey, Modulus, Plaintext, Poly, RelinearizationKey,
+    Representation, SecretKey,
 };
 use itertools::izip;
-use omr_old::pvw::{self, PvwCiphertext, PvwParameters};
+use ndarray::{azip, Array2, IntoNdProducer};
 use rand::thread_rng;
-use std::{hint, sync::Arc};
+use std::{hint, sync::Arc, task::Poll};
 
 pub fn pre_process_batch(
     pvw_params: &Arc<PvwParameters>,
@@ -51,16 +52,19 @@ pub fn pvw_decrypt(
     // advantage of fused multiplication addition to speed this up? For ex, hexl has
     // an API for FMA which is faster (should be right?) than perfoming vector multiplication
     // and addition in a sequence.
+    // There's an additinal optimisation for FMA operation. We can perform FMA in 128 bits without
+    // modulur reduction followed by 128 bit barret reduction in the end. Since we will only be adding 512 128 bits values,
+    // result will not overflow. Amazing!
     // TODO: Provide and API for FMA (ie Ct + Ct * Pt) in Bfv.
     //
     // Length of `d == ell`.
-    let mut d = vec![];
-    for i in 0..sec_len {
-        for j in 0..pvw_params.ell {
-            // multiply sk[j] * hints_pts and add it to d[j]
-            pvw_sk_cts[j].multiply1(rhs)
-        }
-    }
+    // let mut d = vec![];
+    // for i in 0..sec_len {
+    //     for j in 0..pvw_params.ell {
+    //         // multiply sk[j] * hints_pts and add it to d[j]
+    //         pvw_sk_cts[j].multiply1(rhs)
+    //     }
+    // }
 }
 
 pub fn powers_of_x_ct(x: &Ciphertext, rlk: &RelinearizationKey) -> Vec<Ciphertext> {
