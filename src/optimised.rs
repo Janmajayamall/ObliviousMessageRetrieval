@@ -35,7 +35,14 @@ pub fn fma_reverse_u128_poly(d: &mut Array2<u128>, s: &Poly, h: &Poly) {
     });
 }
 
-pub fn optimised_fma(s: &Ciphertext, hint_pts: &[Plaintext], sec_len: usize) -> Ciphertext {
+/// Instead of reading pre-computated rotations from disk this fn rotates `s` which is
+/// more expensive than reading them from disk.
+pub fn optimised_fma_with_rot(
+    mut s: Ciphertext,
+    hint_a_pts: &[Plaintext],
+    sec_len: usize,
+    rtk: &GaloisKey,
+) -> Ciphertext {
     // only works and sec_len <= 512 otherwise overflows
     debug_assert!(sec_len <= 512);
 
@@ -45,8 +52,9 @@ pub fn optimised_fma(s: &Ciphertext, hint_pts: &[Plaintext], sec_len: usize) -> 
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
     for i in 0..sec_len {
         // dbg!(i);
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_pts[i].poly_ntt_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
+        s = rtk.rotate(&s);
     }
 
     let mut d = ndarray::Array2::<u64>::zeros((ctx.moduli.len(), ctx.degree));
@@ -77,6 +85,97 @@ pub fn optimised_fma(s: &Ciphertext, hint_pts: &[Plaintext], sec_len: usize) -> 
     let d1 = Poly::new(d1, &ctx, Representation::Evaluation);
 
     Ciphertext::new(vec![d, d1], s.params(), s.level())
+}
+
+/// Modify this to accept `s` and `hints_pts` as array of file locations instead of ciphertexts.
+/// I don't want to read all 512 rotations of `s` in memory at once since each ciphertext is huge.
+pub fn optimised_fma(s: &Ciphertext, hint_a_pts: &[Plaintext], sec_len: usize) -> Ciphertext {
+    // only works and sec_len <= 512 otherwise overflows
+    debug_assert!(sec_len <= 512);
+
+    let ctx = s.c_ref()[0].context.clone();
+    // let mut d = Poly::zero(&ctx, &Representation::Evaluation);
+    let mut d_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
+    let mut d1_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
+    for i in 0..sec_len {
+        // dbg!(i);
+        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
+    }
+
+    let mut d = ndarray::Array2::<u64>::zeros((ctx.moduli.len(), ctx.degree));
+    let mut d1 = ndarray::Array2::<u64>::zeros((ctx.moduli.len(), ctx.degree));
+    // TODO: combine them
+    azip!(
+        d.outer_iter_mut(),
+        d_u128.outer_iter(),
+        ctx.moduli_ops.into_producer()
+    )
+    .for_each(|mut a, a_u128, modqi| {
+        a.as_slice_mut()
+            .unwrap()
+            .copy_from_slice(&modqi.barret_reduction_u128_vec(a_u128.as_slice().unwrap()));
+    });
+    azip!(
+        d1.outer_iter_mut(),
+        d1_u128.outer_iter(),
+        ctx.moduli_ops.into_producer()
+    )
+    .for_each(|mut a, a_u128, modqi| {
+        a.as_slice_mut()
+            .unwrap()
+            .copy_from_slice(&modqi.barret_reduction_u128_vec(a_u128.as_slice().unwrap()));
+    });
+
+    let d = Poly::new(d, &ctx, Representation::Evaluation);
+    let d1 = Poly::new(d1, &ctx, Representation::Evaluation);
+
+    Ciphertext::new(vec![d, d1], s.params(), s.level())
+}
+
+pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
+    let s_u128 = s as u128;
+    r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
+        *r0 += *a0 as u128 * s_u128;
+    })
+}
+
+/// ciphertext and a 2d vector of u64
+pub fn optmised_range_fn_fma(
+    res0: &mut Array2<u128>,
+    res1: &mut Array2<u128>,
+    ct: &Ciphertext,
+    scalar_reduced: &[u64],
+) {
+    debug_assert!(ct.c_ref()[0].representation == Representation::Evaluation);
+    azip!(
+        res0.outer_iter_mut(),
+        ct.c_ref()[0].coefficients.outer_iter(),
+        scalar_reduced.into_producer()
+    )
+    .for_each(|mut r, a, s| {
+        scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
+    });
+    azip!(
+        res1.outer_iter_mut(),
+        ct.c_ref()[1].coefficients.outer_iter(),
+        scalar_reduced.into_producer()
+    )
+    .for_each(|mut r, a, s| {
+        scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
+    });
+}
+
+pub fn add_u128(r: &mut [u128], a: &[u64]) {
+    r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
+        *r0 += *a0 as u128;
+    })
+}
+
+pub fn optimised_add_range_fn(res: &mut Array2<u128>, p: &Poly) {
+    azip!(res.outer_iter_mut(), p.coefficients.outer_iter(),).for_each(|mut r, a| {
+        add_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap());
+    });
 }
 
 #[cfg(test)]

@@ -27,12 +27,9 @@ fn main() {
 
     let res_values_ct = powers_of_x_ct(&ct, &rlk);
     let res_values_mod = powers_of_x_modulus(8, &params.plaintext_modulus_op);
-
-    izip!(res_values_ct, res_values_mod)
-        .skip(1)
-        .for_each(|(ct, b)| {
-            dbg!(sk.measure_noise(&ct, &mut rng));
-            let r = sk.decrypt(&ct).decode(Encoding::simd(0));
-            r.iter().for_each(|a| assert_eq!(*a, b));
-        })
+    izip!(res_values_ct, res_values_mod).for_each(|(ct, b)| {
+        dbg!(sk.measure_noise(&ct, &mut rng));
+        let r = sk.decrypt(&ct).decode(Encoding::simd(0));
+        r.iter().for_each(|a| assert_eq!(*a, b));
+    })
 }

@@ -17,12 +17,14 @@ pub fn powers_of_x_int(x: u64) -> Vec<u64> {
                 res_deg += base_deg;
                 if calculated[(res_deg - 1) as usize] == 1 {
                     res = cache[(res_deg - 1) as usize];
-                } else if res_deg == base_deg {
-                    res = base;
                 } else {
-                    res = res.wrapping_mul(base);
-                    println!("{p_res_deg}, {base_deg}");
-                    mul_count += 1;
+                    if res_deg == base_deg {
+                        res = base;
+                    } else {
+                        res = res.wrapping_mul(base);
+                        println!("{p_res_deg}, {base_deg}");
+                        mul_count += 1;
+                    }
                     cache[(res_deg - 1) as usize] = res;
                     calculated[(res_deg - 1) as usize] = 1;
                 }
@@ -65,11 +67,13 @@ pub fn powers_of_x_modulus(x: u64, modq: &Modulus) -> Vec<u64> {
                 res_deg += base_deg;
                 if calculated[(res_deg - 1) as usize] == 1 {
                     res = cache[(res_deg - 1) as usize];
-                } else if res_deg == base_deg {
-                    res = base;
                 } else {
-                    res = modq.mul_mod_fast(res, base);
-                    mul_count += 1;
+                    if res_deg == base_deg {
+                        res = base;
+                    } else {
+                        res = modq.mul_mod_fast(res, base);
+                        mul_count += 1;
+                    }
                     cache[(res_deg - 1) as usize] = res;
                     calculated[(res_deg - 1) as usize] = 1;
                 }
