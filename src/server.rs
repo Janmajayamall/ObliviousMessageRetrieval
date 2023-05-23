@@ -1,6 +1,9 @@
 use crate::{
-    optimised::{optimised_add_range_fn, optimised_fma_with_rot, optmised_range_fn_fma},
-    pvw::{self, PvwCiphertext, PvwParameters},
+    optimised::{
+        barret_reduce_coefficients_u128, optimised_add_range_fn, optimised_fma_with_rot,
+        optmised_range_fn_fma, sub_from_one,
+    },
+    pvw::{self, PvwCiphertext, PvwParameters, PvwSecretKey},
 };
 use bfv::{
     BfvParameters, Ciphertext, Encoding, GaloisKey, Modulus, Plaintext, Poly, RelinearizationKey,
@@ -8,7 +11,7 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{azip, s, Array2, IntoNdProducer};
-use rand::thread_rng;
+use rand::{thread_rng, CryptoRng, RngCore};
 use rand_chacha::rand_core::le;
 use std::{hint, sync::Arc, task::Poll};
 
@@ -53,6 +56,38 @@ pub fn pre_process_batch(
     (hint_a_pts, hint_b_polys)
 }
 
+/// Encrypts pvw sk under bfv in desired form
+pub fn encrypt_pvw_sk<R: CryptoRng + RngCore>(
+    bfv_params: &Arc<BfvParameters>,
+    bfv_sk: &SecretKey,
+    pvw_sk: &PvwSecretKey,
+    rng: &mut R,
+) -> Vec<Ciphertext> {
+    let sec_len = pvw_sk.par.n.next_power_of_two();
+    let degree = bfv_params.polynomial_degree;
+
+    // pvw_sk.key is of dimension ell x n
+    let cts = pvw_sk
+        .key
+        .outer_iter()
+        .map(|s| {
+            let mut m = vec![];
+            for i in 0..degree {
+                let index = i % sec_len;
+                if index < pvw_sk.par.n {
+                    m.push(s[index]);
+                } else {
+                    m.push(0);
+                }
+            }
+            let pt = Plaintext::encode(&m, bfv_params, Encoding::simd(0));
+            bfv_sk.encrypt(&pt, rng)
+        })
+        .collect_vec();
+
+    cts
+}
+
 // rotate by 1 and perform plaintext mutiplication for each ell
 pub fn pvw_decrypt(
     pvw_params: &Arc<PvwParameters>,
@@ -85,6 +120,7 @@ pub fn pvw_decrypt(
         .collect_vec();
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
+        // FIXME: Wo don't need this
         sa.sub_reversed_inplace(b);
     });
 
@@ -142,7 +178,7 @@ pub fn powers_of_x_ct(x: &Ciphertext, rlk: &RelinearizationKey) -> Vec<Ciphertex
     values
 }
 
-pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u64>) {
+pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u64>) -> Ciphertext {
     let mut single_powers = powers_of_x_ct(ct, rlk);
     let double_powers = powers_of_x_ct(&single_powers[255], rlk);
 
@@ -180,29 +216,18 @@ pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u6
             );
         }
 
-        let mut res0 = Array2::<u64>::zeros((q_size, ct.params().polynomial_degree));
-        let mut res1 = Array2::<u64>::zeros((q_size, ct.params().polynomial_degree));
+        let p_res0 = Poly::new(
+            barret_reduce_coefficients_u128(&res0_u128, &q_ctx.moduli_ops),
+            &q_ctx,
+            Representation::Evaluation,
+        );
+        let p_res1 = Poly::new(
+            barret_reduce_coefficients_u128(&res1_u128, &q_ctx.moduli_ops),
+            &q_ctx,
+            Representation::Evaluation,
+        );
 
-        azip!(
-            res0.outer_iter_mut(),
-            res1.outer_iter_mut(),
-            res0_u128.outer_iter(),
-            res1_u128.outer_iter(),
-            q_ctx.moduli_ops.into_producer()
-        )
-        .for_each(|mut r0, mut r1, r0_u128, r1_u128, modqi| {
-            r0.as_slice_mut()
-                .unwrap()
-                .copy_from_slice(&modqi.barret_reduction_u128_vec(r0_u128.as_slice().unwrap()));
-            r1.as_slice_mut()
-                .unwrap()
-                .copy_from_slice(&modqi.barret_reduction_u128_vec(r1_u128.as_slice().unwrap()));
-        });
-
-        let p0 = Poly::new(res0, &q_ctx, Representation::Evaluation);
-        let p1 = Poly::new(res1, &q_ctx, Representation::Evaluation);
-
-        let res_ct = Ciphertext::new(vec![p0, p1], ct.params(), level);
+        let res_ct = Ciphertext::new(vec![p_res0, p_res1], ct.params(), level);
 
         // cache i == 0
         if i == 0 {
@@ -219,17 +244,17 @@ pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u6
     }
 
     let mut sum_res0 = Poly::new(
-        barret_reduce_tmp(&sum_res0_u128, &qp_ctx.moduli_ops),
+        barret_reduce_coefficients_u128(&sum_res0_u128, &qp_ctx.moduli_ops),
         &qp_ctx,
         Representation::Evaluation,
     );
     let mut sum_res1 = Poly::new(
-        barret_reduce_tmp(&sum_res1_u128, &qp_ctx.moduli_ops),
+        barret_reduce_coefficients_u128(&sum_res1_u128, &qp_ctx.moduli_ops),
         &qp_ctx,
         Representation::Evaluation,
     );
     let mut sum_res2 = Poly::new(
-        barret_reduce_tmp(&sum_res2_u128, &qp_ctx.moduli_ops),
+        barret_reduce_coefficients_u128(&sum_res2_u128, &qp_ctx.moduli_ops),
         &qp_ctx,
         Representation::Evaluation,
     );
@@ -237,17 +262,17 @@ pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u6
     let mut sum_ct = Ciphertext::new(vec![sum_res0, sum_res1, sum_res2], bfv_params, level);
 
     sum_ct.scale_and_round();
+    let mut sum_ct = rlk.relinearize(&sum_ct);
     sum_ct += &left_over_ct;
 
-    // implement optimised of 1 - sum_ct
+    // implement optimised 1 - sum_ct
+    // sub_from_one(&mut sum_ct);
+
+    sum_ct
 }
 
-fn barret_reduce_tmp(r_u128: &Array2<u128>, modq: &[Modulus]) -> Array2<u64> {
-    let v = r_u128
-        .outer_iter()
-        .zip(modq.iter())
-        .flat_map(|(r0_u128, modqi)| modqi.barret_reduction_u128_vec(r0_u128.as_slice().unwrap()))
-        .collect_vec();
-
-    Array2::from_shape_vec((r_u128.shape()[0], r_u128.shape()[1]), v).unwrap()
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn range_fn_works() {}
 }

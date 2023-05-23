@@ -12,3 +12,5 @@ itertools = "0.10.5"
 ndarray = {version = "0.15.6", features = ["rayon"]}
 rand_chacha = "0.3.1"
 statrs = "0.16.0"
+num-bigint-dig = {version = "0.8.2", features = ["prime"]}
+num-traits = "0.2.15"

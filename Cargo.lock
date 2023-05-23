@@ -407,6 +407,8 @@ dependencies = [
  "bfv",
  "itertools",
  "ndarray",
+ "num-bigint-dig",
+ "num-traits",
  "rand",
  "rand_chacha",
  "statrs",
