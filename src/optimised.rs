@@ -53,25 +53,36 @@ pub fn sub_from_one_precompute(params: &Arc<BfvParameters>, level: usize) -> Vec
 pub fn sub_from_one(ct: &mut Ciphertext, precomputes: &[u64]) {
     debug_assert!(ct.c_ref()[0].representation == Representation::Coefficient);
 
-    ct.c_ref_mut().iter_mut().for_each(|(p)| {
-        azip!(
-            p.coefficients.outer_iter_mut(),
-            p.context.moduli.into_producer(),
-            precomputes.into_producer(),
-        )
-        .for_each(|mut coeffs, qi, scalar| {
-            // modulus subtraction for first coefficient
-            let r = &mut coeffs[0];
-            if scalar > r {
-                *r = scalar - *r;
-            } else {
-                *r = scalar + qi - *r;
-            }
+    let ctx = ct.params().ciphertext_ctx_at_level(ct.level());
+    debug_assert!(ctx == ct.c_ref()[0].context);
 
-            coeffs.iter_mut().skip(1).for_each(|c| {
-                *c = *qi - *c;
-            })
-        });
+    azip!(
+        ct.c_ref_mut()[0].coefficients.outer_iter_mut(),
+        ctx.moduli.into_producer(),
+        precomputes.into_producer(),
+    )
+    .for_each(|mut coeffs, qi, scalar| {
+        // modulus subtraction for first coefficient
+        let r = &mut coeffs[0];
+        if scalar > r {
+            *r = scalar - *r;
+        } else {
+            *r = scalar + qi - *r;
+        }
+
+        coeffs.iter_mut().skip(1).for_each(|c| {
+            *c = *qi - *c;
+        })
+    });
+
+    azip!(
+        ct.c_ref_mut()[1].coefficients.outer_iter_mut(),
+        ctx.moduli.into_producer(),
+    )
+    .for_each(|mut coeffs, qi| {
+        coeffs.iter_mut().skip(0).for_each(|c| {
+            *c = *qi - *c;
+        })
     });
 }
 
@@ -220,6 +231,8 @@ pub fn optimised_add_range_fn(res: &mut Array2<u128>, p: &Poly) {
 
 #[cfg(test)]
 mod tests {
+    use crate::utils::{precompute_range_constants, read_range_coeffs};
+
     use super::*;
 
     #[test]
@@ -346,7 +359,7 @@ mod tests {
 
     #[test]
     fn sub_from_one_works() {
-        let params = Arc::new(BfvParameters::default(15, 1 << 15));
+        let params = Arc::new(BfvParameters::default(5, 1 << 8));
         let mut rng = thread_rng();
         let m = params
             .plaintext_modulus_op
@@ -385,6 +398,88 @@ mod tests {
             "Noise: Opt={:?}, UnOpt={:?}",
             sk.measure_noise(&ct, &mut rng),
             sk.measure_noise(&ct_clone, &mut rng),
+        );
+    }
+
+    #[test]
+    fn test_optimised_range_fn_fma() {
+        let mut rng = thread_rng();
+        let params = Arc::new(BfvParameters::default(15, 1 << 15));
+        let m = params
+            .plaintext_modulus_op
+            .random_vec(params.polynomial_degree, &mut rng);
+        let sk = SecretKey::random(&params, &mut rng);
+        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
+        let mut ct = sk.encrypt(&pt, &mut rng);
+        // change ct representation to Evaluation for plaintext mul
+        ct.change_representation(&Representation::Evaluation);
+
+        let ctx = params.ciphertext_ctx_at_level(0);
+        let constants = precompute_range_constants(&ctx);
+
+        {
+            // warmup
+            let mut tmp = Ciphertext::zero(&params, 0);
+            for j in 0..300 {
+                if j == 1 {
+                    tmp = &ct * &pt;
+                } else {
+                    tmp += &(&ct * &pt);
+                }
+            }
+        }
+
+        // optimised version
+        let now = std::time::Instant::now();
+        let mut res0_u128 = Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
+        let mut res1_u128 = Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
+        for j in 0..256 {
+            optmised_range_fn_fma(
+                &mut res0_u128,
+                &mut res1_u128,
+                &ct,
+                constants.slice(s![j, ..]).as_slice().unwrap(),
+            );
+        }
+        let p_res0 = Poly::new(
+            barret_reduce_coefficients_u128(&res0_u128, &ctx.moduli_ops),
+            &ctx,
+            Representation::Evaluation,
+        );
+        let p_res1 = Poly::new(
+            barret_reduce_coefficients_u128(&res1_u128, &ctx.moduli_ops),
+            &ctx,
+            Representation::Evaluation,
+        );
+        let res_opt = Ciphertext::new(vec![p_res0, p_res1], ct.params(), ct.level());
+        let time_opt = now.elapsed();
+
+        // unoptimised version
+        let range_coeffs = read_range_coeffs();
+        // prepare range coefficients plaintext
+        let pts = (0..256)
+            .map(|i| {
+                let c = range_coeffs[i];
+                let m = vec![c; ctx.degree];
+                Plaintext::encode(&m, &params, Encoding::simd(ct.level))
+            })
+            .collect_vec();
+        let now = std::time::Instant::now();
+        let mut res_unopt = Ciphertext::zero(&params, ct.level());
+        for j in 1..257 {
+            if j == 1 {
+                res_unopt = &ct * &pts[j - 1];
+            } else {
+                res_unopt += &(&ct * &pts[j - 1]);
+            }
+        }
+        let time_unopt = now.elapsed();
+
+        println!("Time: Opt={:?}, UnOpt={:?}", time_opt, time_unopt);
+        println!(
+            "Noise: Opt={:?}, UnOpt={:?}",
+            sk.measure_noise(&res_opt, &mut rng),
+            sk.measure_noise(&res_unopt, &mut rng),
         );
     }
 }

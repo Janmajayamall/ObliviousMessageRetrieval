@@ -4,6 +4,7 @@ use crate::{
         optmised_range_fn_fma, sub_from_one,
     },
     pvw::{self, PvwCiphertext, PvwParameters, PvwSecretKey},
+    utils::{decrypt_and_print, read_range_coeffs},
 };
 use bfv::{
     BfvParameters, Ciphertext, Encoding, GaloisKey, Modulus, Plaintext, Poly, RelinearizationKey,
@@ -13,7 +14,7 @@ use itertools::{izip, Itertools};
 use ndarray::{azip, s, Array2, IntoNdProducer};
 use rand::{thread_rng, CryptoRng, RngCore};
 use rand_chacha::rand_core::le;
-use std::{hint, sync::Arc, task::Poll};
+use std::{hint, sync::Arc, time::Instant};
 
 pub fn pre_process_batch(
     pvw_params: &Arc<PvwParameters>,
@@ -178,32 +179,48 @@ pub fn powers_of_x_ct(x: &Ciphertext, rlk: &RelinearizationKey) -> Vec<Ciphertex
     values
 }
 
-pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u64>) -> Ciphertext {
+pub fn range_fn(
+    ct: &Ciphertext,
+    rlk: &RelinearizationKey,
+    constants: &Array2<u64>,
+    sub_from_one_precompute: &[u64],
+    sk: &SecretKey,
+) -> Ciphertext {
+    let mut now = Instant::now();
     let mut single_powers = powers_of_x_ct(ct, rlk);
+    println!("single_powers: {:?}", now.elapsed());
+    decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
+
+    now = Instant::now();
     let double_powers = powers_of_x_ct(&single_powers[255], rlk);
+    println!("double_powers: {:?}", now.elapsed());
+    decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
 
     // change to evaluation for plaintext multiplication
+    now = Instant::now();
     single_powers.iter_mut().for_each(|ct| {
         ct.change_representation(&Representation::Evaluation);
     });
+    println!(
+        "single_powers coefficient to evaluation: {:?}",
+        now.elapsed()
+    );
 
     let level = 0;
     let bfv_params = ct.params();
     let q_ctx = bfv_params.ciphertext_ctx_at_level(level);
-    let qp_ctx = bfv_params.extension_poly_contexts[level].clone();
     let q_size = q_ctx.moduli.len();
-    let qp_size = qp_ctx.moduli.len();
 
     // when i = 0, we skip multiplication and cache the result
     let mut left_over_ct = Ciphertext::zero(&bfv_params, level);
+    let mut sum_ct = Ciphertext::zero(&bfv_params, level);
 
-    let mut sum_res0_u128 = Array2::<u128>::zeros((qp_size, ct.params().polynomial_degree));
-    let mut sum_res1_u128 = Array2::<u128>::zeros((qp_size, ct.params().polynomial_degree));
-    let mut sum_res2_u128 = Array2::<u128>::zeros((qp_size, ct.params().polynomial_degree));
-
+    now = Instant::now();
     for i in 0..256 {
         let mut res0_u128 = Array2::<u128>::zeros((q_size, ct.params().polynomial_degree));
         let mut res1_u128 = Array2::<u128>::zeros((q_size, ct.params().polynomial_degree));
+
+        // let mut inner_now = Instant::now();
         for j in 1..257 {
             optmised_range_fn_fma(
                 &mut res0_u128,
@@ -228,51 +245,94 @@ pub fn range_fn(ct: &Ciphertext, rlk: &RelinearizationKey, constants: &Array2<u6
         );
 
         let res_ct = Ciphertext::new(vec![p_res0, p_res1], ct.params(), level);
+        // println!("Inner scalar product {i}: {:?}", inner_now.elapsed());
+        // decrypt_and_print(&res_ct, sk, &format!("Inner scalar product {i}"));
 
         // cache i == 0
         if i == 0 {
             left_over_ct = res_ct;
             // convert  ct to coefficient form
             left_over_ct.change_representation(&Representation::Coefficient);
-        } else {
+        } else if i == 1 {
             // multiply1_lazy returns in evaluation form
-            let product = res_ct.multiply1_lazy(&double_powers[i - 1]);
-            optimised_add_range_fn(&mut sum_res0_u128, &product.c_ref()[0]);
-            optimised_add_range_fn(&mut sum_res1_u128, &product.c_ref()[1]);
-            optimised_add_range_fn(&mut sum_res2_u128, &product.c_ref()[2]);
+            sum_ct = res_ct.multiply1_lazy(&double_powers[i - 1]);
+        } else {
+            sum_ct += &res_ct.multiply1_lazy(&double_powers[i - 1]);
         }
     }
-
-    let mut sum_res0 = Poly::new(
-        barret_reduce_coefficients_u128(&sum_res0_u128, &qp_ctx.moduli_ops),
-        &qp_ctx,
-        Representation::Evaluation,
-    );
-    let mut sum_res1 = Poly::new(
-        barret_reduce_coefficients_u128(&sum_res1_u128, &qp_ctx.moduli_ops),
-        &qp_ctx,
-        Representation::Evaluation,
-    );
-    let mut sum_res2 = Poly::new(
-        barret_reduce_coefficients_u128(&sum_res2_u128, &qp_ctx.moduli_ops),
-        &qp_ctx,
-        Representation::Evaluation,
-    );
-
-    let mut sum_ct = Ciphertext::new(vec![sum_res0, sum_res1, sum_res2], bfv_params, level);
 
     sum_ct.scale_and_round();
     let mut sum_ct = rlk.relinearize(&sum_ct);
     sum_ct += &left_over_ct;
+    println!("Outer summation: {:?}", now.elapsed());
+    decrypt_and_print(&sum_ct, sk, "Outer smmation");
 
     // implement optimised 1 - sum_ct
-    // sub_from_one(&mut sum_ct);
-
+    sub_from_one(&mut sum_ct, sub_from_one_precompute);
     sum_ct
 }
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::E;
+
+    use super::*;
+    use crate::{optimised::sub_from_one_precompute, utils::precompute_range_constants};
+    use bfv::BfvParameters;
+
     #[test]
-    fn range_fn_works() {}
+    fn range_fn_works() {
+        let params = Arc::new(BfvParameters::default(10, 1 << 15));
+        let ctx = params.ciphertext_ctx_at_level(0);
+
+        let mut rng = thread_rng();
+        let constants = precompute_range_constants(&ctx);
+        let sub_one_precompute = sub_from_one_precompute(&params, 0);
+
+        let sk = SecretKey::random(&params, &mut rng);
+        let mut m = params
+            .plaintext_modulus_op
+            .random_vec(params.polynomial_degree, &mut rng);
+        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
+        let mut ct = sk.encrypt(&pt, &mut rng);
+
+        // gen rlk
+        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+
+        let now = std::time::Instant::now();
+        let ct_res = range_fn(&ct, &rlk, &constants, &sub_one_precompute, &sk);
+        let time = now.elapsed();
+        dbg!(time);
+        dbg!(sk.measure_noise(&ct_res, &mut rng));
+        let res = sk.decrypt(&ct_res).decode(Encoding::simd(0));
+
+        izip!(res.iter(), m.iter()).for_each(|(r, e)| {
+            if *e <= 850 || *e >= (65537 - 850) {
+                assert!(*r == 1);
+            } else {
+                assert!(*r == 0);
+            }
+        });
+    }
+
+    #[test]
+    fn powers_of_x_ct_works() {
+        let mut rng = thread_rng();
+        let params = Arc::new(BfvParameters::default(15, 1 << 15));
+        let sk = SecretKey::random(&params, &mut rng);
+        let m = vec![3; params.polynomial_degree];
+        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
+        let ct = sk.encrypt(&pt, &mut rng);
+        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+
+        {
+            for _ in 0..1 {
+                powers_of_x_ct(&ct, &rlk);
+            }
+        }
+
+        let now = std::time::Instant::now();
+        let powers = powers_of_x_ct(&ct, &rlk);
+        println!("Time = {:?}", now.elapsed());
+    }
 }

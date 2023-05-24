@@ -16,17 +16,18 @@ fn main() {
     // }
     // assert_eq!(values, res_values);
     let mut rng = thread_rng();
-    let params = Arc::new(BfvParameters::default(4, 1 << 11));
+    let params = Arc::new(BfvParameters::default(15, 1 << 3));
     let sk = SecretKey::random(&params, &mut rng);
-    let m = vec![8; params.polynomial_degree];
+    let m = vec![3; params.polynomial_degree];
     let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
     let ct = sk.encrypt(&pt, &mut rng);
 
     // gen rlk
     let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
-
-    let res_values_ct = powers_of_x_ct(&ct, &rlk);
-    let res_values_mod = powers_of_x_modulus(8, &params.plaintext_modulus_op);
+    let one = powers_of_x_ct(&ct, &rlk);
+    let res_values_ct = powers_of_x_ct(&one[255], &rlk);
+    let res_values_mod = powers_of_x_modulus(282, &params.plaintext_modulus_op);
+    dbg!(res_values_mod[255]);
     izip!(res_values_ct, res_values_mod).for_each(|(ct, b)| {
         dbg!(sk.measure_noise(&ct, &mut rng));
         let r = sk.decrypt(&ct).decode(Encoding::simd(0));

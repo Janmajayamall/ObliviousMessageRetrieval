@@ -1,5 +1,7 @@
 use bfv::Modulus;
 
+use crate::utils::read_range_coeffs;
+
 pub fn powers_of_x_int(x: u64) -> Vec<u64> {
     let mut val = 256;
     let mut cache = vec![0u64; 256];
@@ -93,4 +95,36 @@ pub fn powers_of_x_modulus(x: u64, modq: &Modulus) -> Vec<u64> {
         }
     }
     cache
+}
+
+fn range_fn_modulus() {
+    let modq = Modulus::new(65537);
+
+    // value on which range_fn is evaluated
+    let v = 28192;
+    let single = powers_of_x_modulus(v, &modq);
+    let double = powers_of_x_modulus(single[255], &modq);
+
+    let range_coeff = read_range_coeffs();
+
+    let mut sum = 0;
+    for i in 0..256 {
+        let mut tmp = 0;
+        for j in 1..257 {
+            tmp = modq.add_mod_fast(
+                tmp,
+                modq.mul_mod_fast(single[j - 1], range_coeff[(i * 256) + (j - 1)]),
+            );
+        }
+
+        if i == 0 {
+            sum = tmp;
+        } else {
+            sum = modq.add_mod_fast(sum, modq.mul_mod_fast(double[i - 1], tmp));
+        }
+        dbg!(sum);
+    }
+
+    sum = modq.sub_mod_fast(1, sum);
+    dbg!(sum);
 }

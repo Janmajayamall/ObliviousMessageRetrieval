@@ -405,6 +405,7 @@ name = "omr"
 version = "0.1.0"
 dependencies = [
  "bfv",
+ "byteorder",
  "itertools",
  "ndarray",
  "num-bigint-dig",
