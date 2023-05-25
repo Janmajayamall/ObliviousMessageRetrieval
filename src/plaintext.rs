@@ -128,3 +128,55 @@ fn range_fn_modulus() {
     sum = modq.sub_mod_fast(1, sum);
     dbg!(sum);
 }
+
+// Expensive clone()
+#[derive(Clone)]
+struct MyStruct {
+    coeffs: Vec<u64>,
+}
+impl MyStruct {
+    fn mul(&self, rhs: &MyStruct) -> MyStruct {
+        let res = self
+            .coeffs
+            .iter()
+            .zip(rhs.coeffs.iter())
+            .map(|(l, r)| l.wrapping_mul(*r))
+            .collect::<Vec<u64>>();
+        MyStruct { coeffs: res }
+    }
+
+    fn zero() -> MyStruct {
+        MyStruct { coeffs: vec![] }
+    }
+}
+fn powers_of_x(x: &MyStruct) -> Vec<MyStruct> {
+    let mut powers = vec![MyStruct::zero(); 256];
+    let mut calculated = vec![0u64; 256];
+
+    for i in (2..257).rev() {
+        let mut exp = i;
+        let mut base_deg = 1usize;
+        let mut res_deg = 0usize;
+        let mut prev_res_deg = 0usize;
+        while exp > 0 {
+            if exp & 1 == 1 {
+                prev_res_deg = res_deg;
+                res_deg += base_deg;
+                if calculated[res_deg - 1] == 0 && res_deg != base_deg {
+                    powers[res_deg - 1] = powers[prev_res_deg - 1].mul(&powers[base_deg - 1]);
+                    calculated[res_deg - 1] = 1;
+                }
+            }
+            exp >>= 1;
+            if exp != 0 {
+                let g = base_deg;
+                base_deg *= 2;
+                if calculated[base_deg - 1] == 0 {
+                    powers[base_deg - 1] = powers[g - 1].mul(&powers[g - 1]);
+                    calculated[base_deg - 1] = 1;
+                }
+            }
+        }
+    }
+    powers
+}

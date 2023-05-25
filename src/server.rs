@@ -132,50 +132,41 @@ pub fn pvw_decrypt(
 pub fn powers_of_x_ct(x: &Ciphertext, rlk: &RelinearizationKey) -> Vec<Ciphertext> {
     let mut values = vec![Ciphertext::zero(&x.params(), x.level()); 256];
     let mut calculated = vec![0u64; 256];
+    values[0] = x.clone();
+    calculated[0] = 1;
     let mut mul_count = 0;
+
     for i in (2..257).rev() {
         let mut exp = i;
-        let mut base = x.clone();
-        let mut res = Ciphertext::zero(&x.params(), x.level());
         let mut base_deg = 1;
         let mut res_deg = 0;
 
         while exp > 0 {
             if exp & 1 == 1 {
+                let p_res_deg = res_deg;
                 res_deg += base_deg;
-
-                if calculated[res_deg - 1] == 1 {
-                    res = values[res_deg - 1].clone();
-                } else {
-                    // Covers the case when res is Ciphertext::zero
-                    if res_deg == base_deg {
-                        res = base.clone();
-                    } else {
-                        mul_count += 1;
-                        let tmp = res.multiply1(&base);
-                        res = rlk.relinearize(&tmp);
-                    }
-                    values[res_deg - 1] = res.clone();
+                if res_deg != base_deg && calculated[res_deg - 1] == 0 {
+                    let tmp = values[p_res_deg - 1].multiply1(&values[base_deg - 1]);
+                    values[res_deg - 1] = rlk.relinearize(&tmp);
                     calculated[res_deg - 1] = 1;
+                    mul_count += 1;
                 }
             }
             exp >>= 1;
             if exp != 0 {
+                let p_base_deg = base_deg;
                 base_deg *= 2;
-
-                if calculated[base_deg - 1] == 1 {
-                    base = values[base_deg - 1].clone();
-                } else {
-                    mul_count += 1;
-                    let tmp = base.multiply1(&base);
+                if calculated[base_deg - 1] == 0 {
+                    let tmp = values[p_base_deg - 1].multiply1(&values[p_base_deg - 1]);
                     values[base_deg - 1] = rlk.relinearize(&tmp);
-                    base = values[base_deg - 1].clone();
                     calculated[base_deg - 1] = 1;
+                    mul_count += 1;
                 }
             }
         }
     }
-    // dbg!(mul_count);
+    dbg!(mul_count);
+
     values
 }
 
