@@ -4,11 +4,12 @@ use bfv::{
     Representation, SecretKey,
 };
 use itertools::{izip, Itertools};
-use ndarray::{azip, s, Array2, IntoNdProducer};
+use ndarray::{azip, s, Array1, Array2, IntoNdProducer};
 use num_bigint_dig::{BigUint, ModInverse, ToBigUint};
 use num_traits::ToPrimitive;
 use rand::thread_rng;
-use std::{hint, sync::Arc, task::Poll};
+use std::{hint, os::unix::thread, sync::Arc, task::Poll};
+use traits::Ntt;
 
 /// Barrett reduction of coefficients in u128 to u64
 pub fn barret_reduce_coefficients_u128(r_u128: &Array2<u128>, modq: &[Modulus]) -> Array2<u64> {
@@ -22,7 +23,10 @@ pub fn barret_reduce_coefficients_u128(r_u128: &Array2<u128>, modq: &[Modulus]) 
 }
 
 /// We can precompute these and store them somewhere. No need to change them until we change parameters.
-pub fn sub_from_one_precompute(params: &Arc<BfvParameters>, level: usize) -> Vec<u64> {
+pub fn sub_from_one_precompute<T: traits::Ntt>(
+    params: &Arc<BfvParameters<T>>,
+    level: usize,
+) -> Vec<u64> {
     let ctx = params.ciphertext_ctx_at_level(level);
     let q = ctx.modulus_dig();
     let q_mod_t = &q % params.plaintext_modulus;
@@ -50,7 +54,10 @@ pub fn sub_from_one_precompute(params: &Arc<BfvParameters>, level: usize) -> Vec
 /// and set that as 0th index coefficient. Hence, scaled_pt_poly = [[[Q]_t * t_inv]_Q, 0, 0, ...]. If the ciphertext ct is in
 /// coefficient form, then you can simply reduce (optimisation!) calculating pt(1) - ct to `([[Q]_t * -t_inv]_Q - ct[0]) % Q`. Therefore
 /// instead of `degree` modulus subtraction, we do 1 + `degree - 1` subtraction.
-pub fn sub_from_one(ct: &mut Ciphertext, precomputes: &[u64]) {
+pub fn sub_from_one<T>(ct: &mut Ciphertext<T>, precomputes: &[u64])
+where
+    T: traits::Ntt,
+{
     debug_assert!(ct.c_ref()[0].representation == Representation::Coefficient);
 
     let ctx = ct.params().ciphertext_ctx_at_level(ct.level());
@@ -96,7 +103,7 @@ pub fn fma_reverse_u128_vec(a: &mut [u128], b: &[u64], c: &[u64]) {
     });
 }
 
-pub fn fma_reverse_u128_poly(d: &mut Array2<u128>, s: &Poly, h: &Poly) {
+pub fn fma_reverse_u128_poly<T: Ntt>(d: &mut Array2<u128>, s: &Poly<T>, h: &Poly<T>) {
     debug_assert!(s.representation == h.representation);
     debug_assert!(s.representation == Representation::Evaluation);
     debug_assert!(s.context == h.context);
@@ -118,12 +125,13 @@ pub fn fma_reverse_u128_poly(d: &mut Array2<u128>, s: &Poly, h: &Poly) {
 
 /// Instead of reading pre-computated rotations from disk this fn rotates `s` which is
 /// more expensive than reading them from disk.
-pub fn optimised_fma_with_rot(
-    mut s: Ciphertext,
-    hint_a_pts: &[Plaintext],
+pub fn optimised_fma_with_rot<T: Ntt>(
+    s: &Ciphertext<T>,
+    hint_a_pts: &[Plaintext<T>],
     sec_len: usize,
-    rtk: &GaloisKey,
-) -> Ciphertext {
+    rtk: &GaloisKey<T>,
+    sk: &SecretKey<T>,
+) -> Ciphertext<T> {
     // only works and sec_len <= 512 otherwise overflows
     debug_assert!(sec_len <= 512);
 
@@ -131,11 +139,23 @@ pub fn optimised_fma_with_rot(
     // let mut d = Poly::zero(&ctx, &Representation::Evaluation);
     let mut d_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((ctx.moduli.len(), ctx.degree));
-    for i in 0..sec_len {
+
+    // To repeatedly rotate `s` and set output to `s`, `s` must be Ciphertext<T> not its reference.
+    // To avoid having to me `s` in function params Ciphertext<T> we perform first plaintext mul
+    // outside loop and then set a new `s` after rotating `s` passed in function.
+    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].poly_ntt_ref());
+    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].poly_ntt_ref());
+    let mut s = rtk.rotate(s);
+    for i in 1..sec_len {
         // dbg!(i);
         fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
         fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
         s = rtk.rotate(&s);
+
+        // {
+        //     let mut rng = thread_rng();
+        //     dbg!(sk.measure_noise(&s, &mut rng));
+        // }
     }
 
     let d = Poly::new(
@@ -154,7 +174,11 @@ pub fn optimised_fma_with_rot(
 
 /// Modify this to accept `s` and `hints_pts` as array of file locations instead of ciphertexts.
 /// I don't want to read all 512 rotations of `s` in memory at once since each ciphertext is huge.
-pub fn optimised_fma(s: &Ciphertext, hint_a_pts: &[Plaintext], sec_len: usize) -> Ciphertext {
+pub fn optimised_fma<T: Ntt>(
+    s: &Ciphertext<T>,
+    hint_a_pts: &[Plaintext<T>],
+    sec_len: usize,
+) -> Ciphertext<T> {
     // only works and sec_len <= 512 otherwise overflows
     debug_assert!(sec_len <= 512);
 
@@ -189,10 +213,10 @@ pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
 }
 
 /// ciphertext and a vector of u64
-pub fn optmised_range_fn_fma(
+pub fn optmised_range_fn_fma<T: Ntt>(
     res0: &mut Array2<u128>,
     res1: &mut Array2<u128>,
-    ct: &Ciphertext,
+    ct: &Ciphertext<T>,
     scalar_reduced: &[u64],
 ) {
     debug_assert!(ct.c_ref()[0].representation == Representation::Evaluation);
@@ -223,7 +247,7 @@ pub fn add_u128(r: &mut [u128], a: &[u64]) {
 
 /// A lot slower than naively adding ciphertexts because u128 additions are
 /// lot more expensive than 1 u64 add + 1 u64 cmp (atleast on m1).
-pub fn optimised_add_range_fn(res: &mut Array2<u128>, p: &Poly) {
+pub fn optimised_add_range_fn<T: Ntt>(res: &mut Array2<u128>, p: &Poly<T>) {
     azip!(res.outer_iter_mut(), p.coefficients.outer_iter(),).for_each(|mut r, a| {
         add_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap());
     });
