@@ -14,7 +14,7 @@ use itertools::{izip, Itertools};
 use ndarray::{azip, s, Array2, IntoNdProducer};
 use rand::{thread_rng, CryptoRng, RngCore};
 use rand_chacha::rand_core::le;
-use std::{hint, sync::Arc, time::Instant};
+use std::{collections::HashMap, hint, sync::Arc, time::Instant};
 use traits::Ntt;
 
 pub fn pre_process_batch<T: Ntt>(
@@ -294,9 +294,66 @@ pub fn range_fn<T: Ntt>(
     sum_ct
 }
 
-pub fn expand_pertinency_vector() {
+pub fn expand_pertinency_vector<T: Ntt>(
+    bfv_params: &Arc<BfvParameters<T>>,
+    degree: usize,
+    pv_ct: &Ciphertext<T>,
+    rtks: &HashMap<usize, GaloisKey<T>>,
+) {
     // extract first 32
-    // expand 32 into 
+    let pt_32 = Plaintext::encode(&vec![1; 32], &bfv_params, Encoding::simd(0));
+    // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
+    let pt_4_roll = Plaintext::encode(&vec![1; 32], &bfv_params, Encoding::simd(0));
+    // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
+    let pt_1_roll = Plaintext::encode(&vec![1; 32], &bfv_params, Encoding::simd(0));
+    for i in 0..(degree / 32) {
+        let mut r32_ct = pv_ct * &pt_32;
+
+        // populate 32 across all lanes
+        let mut i = 32;
+        while i < (degree / 32) {
+            r32_ct += &rtks.get(&i).unwrap().rotate(&r32_ct);
+            i *= 2;
+        }
+        r32_ct += &rtks.get(&(2 * degree - 1)).unwrap().rotate(&r32_ct);
+
+        // extract first 4
+        let mut fours = vec![];
+        for _ in 0..8 {
+            fours.push(&r32_ct * &pt_4_roll);
+        }
+
+        // expand fours
+        let mut i = 4;
+        while i < 32 {
+            for index in 0..8 {
+                fours[index] = rtks.get(&i).unwrap().rotate(&fours[index]);
+            }
+            i *= 2;
+        }
+
+        let mut finals = vec![];
+        for index4s in 0..8 {
+            let four = &fours[index4s];
+
+            let mut ones = vec![];
+            for i in 0..4 {
+                ones.push(four * &pt_1_roll);
+            }
+
+            let mut i = 1;
+            while i < 4 {
+                for j in 0..4 {
+                    ones[j] = rtks.get(&i).unwrap().rotate(&ones[j]);
+                }
+                i *= 2;
+            }
+            finals.push(ones);
+        }
+        let finals = finals.concat();
+    }
+
+    // expand 32 into
 }
 
 #[cfg(test)]
