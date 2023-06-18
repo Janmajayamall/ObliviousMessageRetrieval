@@ -23,7 +23,7 @@ pub fn precompute_range_constants<T: Ntt>(ctx: &PolyContext<T>) -> Array2<u64> {
     Array2::from_shape_vec((65536usize, ctx.moduli.len()), v).unwrap()
 }
 
-pub fn decrypt_and_print<T: Ntt>(ct: &Ciphertext<T>, sk: &SecretKey<T>, tag: &str) {
+pub unsafe fn decrypt_and_print<T: Ntt>(ct: &Ciphertext<T>, sk: &SecretKey<T>, tag: &str) {
     let mut rng = thread_rng();
     let v = sk.decrypt(ct).decode(Encoding::simd(0));
     println!(

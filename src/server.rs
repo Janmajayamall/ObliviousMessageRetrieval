@@ -137,7 +137,6 @@ pub fn pvw_decrypt<T: Ntt>(
     sk_a
 }
 
-// TODO: remove clones
 pub fn powers_of_x_ct<T: Ntt>(
     x: &Ciphertext<T>,
     rlk: &RelinearizationKey<T>,
@@ -176,17 +175,79 @@ pub fn powers_of_x_ct<T: Ntt>(
                     let tmp = values[p_base_deg - 1].multiply1(&values[p_base_deg - 1]);
                     values[base_deg - 1] = rlk.relinearize(&tmp);
 
-                    {
-                        let mut rng = thread_rng();
-                        println!(
-                            "base_deg {} noise: {}",
-                            base_deg,
-                            sk.measure_noise(&values[base_deg - 1], &mut rng)
-                        );
-                    }
+                    // unsafe {
+                    //     decrypt_and_print(
+                    //         &values[base_deg - 1],
+                    //         sk,
+                    //         &format!("base_deg {base_deg}"),
+                    //     )
+                    // };
 
                     // println!("Base deg time: {:?}", now.elapsed());
                     calculated[base_deg - 1] = 1;
+
+                    // mul_count += 1;
+                }
+            }
+        }
+    }
+    // dbg!(mul_count);
+
+    values
+}
+
+pub fn even_powers_of_x_ct<T: Ntt>(
+    x: &Ciphertext<T>,
+    rlk: &RelinearizationKey<T>,
+    sk: &SecretKey<T>,
+) -> Vec<Ciphertext<T>> {
+    let mut values = vec![Ciphertext::zero(&x.params(), x.level()); 128];
+    let mut calculated = vec![0u64; 128];
+
+    // x^2
+    let tmp = x.multiply1(x);
+    values[0] = rlk.relinearize(&tmp);
+    calculated[0] = 1;
+    let mut mul_count = 0;
+
+    for i in (4..257).step_by(2).rev() {
+        // LSB of even value is 0. So we can ignore it.
+        let mut exp = i >> 1;
+        let mut base_deg = 2;
+        let mut res_deg = 0;
+
+        while exp > 0 {
+            if exp & 1 == 1 {
+                let p_res_deg = res_deg;
+                res_deg += base_deg;
+                if res_deg != base_deg && calculated[res_deg / 2 - 1] == 0 {
+                    // let now = Instant::now();
+                    let tmp = values[p_res_deg / 2 - 1].multiply1(&values[base_deg / 2 - 1]);
+                    values[res_deg / 2 - 1] = rlk.relinearize(&tmp);
+                    // println!("Res deg time: {:?}", now.elapsed());
+                    calculated[res_deg / 2 - 1] = 1;
+                    // mul_count += 1;
+                }
+            }
+            exp >>= 1;
+            if exp != 0 {
+                let p_base_deg = base_deg;
+                base_deg *= 2;
+                if calculated[base_deg / 2 - 1] == 0 {
+                    // let now = Instant::now();
+                    let tmp = values[p_base_deg / 2 - 1].multiply1(&values[p_base_deg / 2 - 1]);
+                    values[base_deg / 2 - 1] = rlk.relinearize(&tmp);
+
+                    // unsafe {
+                    //     decrypt_and_print(
+                    //         &values[base_deg - 1],
+                    //         sk,
+                    //         &format!("base_deg {base_deg}"),
+                    //     )
+                    // };
+
+                    // println!("Base deg time: {:?}", now.elapsed());
+                    calculated[base_deg / 2 - 1] = 1;
 
                     // mul_count += 1;
                 }
@@ -206,14 +267,14 @@ pub fn range_fn<T: Ntt>(
     sk: &SecretKey<T>,
 ) -> Ciphertext<T> {
     // let mut now = Instant::now();
-    let mut single_powers = powers_of_x_ct(ct, rlk, sk);
+    let mut single_powers = even_powers_of_x_ct(ct, rlk, sk);
     // println!("single_powers: {:?}", now.elapsed());
-    decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
+    // decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
 
     // now = Instant::now();
-    let double_powers = powers_of_x_ct(&single_powers[255], rlk, sk);
+    let double_powers = powers_of_x_ct(&single_powers[127], rlk, sk);
     // println!("double_powers: {:?}", now.elapsed());
-    decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
+    // decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
 
     // change to evaluation for plaintext multiplication
     // now = Instant::now();
@@ -247,7 +308,7 @@ pub fn range_fn<T: Ntt>(
             optmised_range_fn_fma(
                 &mut res0_u128,
                 &mut res1_u128,
-                &single_powers[j - 1],
+                &single_powers[j / 2 - 1],
                 constants
                     .slice(s![(i * 256) + (j - 1), ..])
                     .as_slice()
@@ -287,7 +348,7 @@ pub fn range_fn<T: Ntt>(
     let mut sum_ct = rlk.relinearize(&sum_ct);
     sum_ct += &left_over_ct;
     // println!("Outer summation: {:?}", now.elapsed());
-    decrypt_and_print(&sum_ct, sk, "Outer smmation");
+    // decrypt_and_print(&sum_ct, sk, "Outer smmation");
 
     // implement optimised 1 - sum_ct
     sub_from_one(&mut sum_ct, sub_from_one_precompute);
@@ -454,7 +515,7 @@ mod tests {
 
     #[test]
     fn range_fn_works() {
-        let params = Arc::new(BfvParameters::default(15, 1 << 3));
+        let params = Arc::new(BfvParameters::default(15, 1 << 15));
         let ctx = params.ciphertext_ctx_at_level(0);
 
         let mut rng = thread_rng();
@@ -512,6 +573,28 @@ mod tests {
         izip!(powers_ct.iter(), res_values_mod.iter()).for_each(|(pct, v)| {
             dbg!(sk.measure_noise(pct, &mut rng));
             let r = sk.decrypt(pct).decode(Encoding::simd(0));
+            r.iter().for_each(|r0| {
+                assert!(r0 == v);
+            });
+        });
+    }
+
+    #[test]
+    fn even_powers_of_x_ct_works() {
+        let mut rng = thread_rng();
+        let params = Arc::new(BfvParameters::default(10, 1 << 15));
+        let sk = SecretKey::random(&params, &mut rng);
+        let m = vec![3; params.polynomial_degree];
+        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
+        let ct = sk.encrypt(&pt, &mut rng);
+        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+
+        let powers = even_powers_of_x_ct(&ct, &rlk, &sk);
+        let res_values_mod = powers_of_x_modulus(3, &params.plaintext_modulus_op);
+
+        izip!(res_values_mod.iter().skip(1).step_by(2), powers.iter()).for_each(|(v, v_ct)| {
+            dbg!(sk.measure_noise(v_ct, &mut rng));
+            let r = sk.decrypt(v_ct).decode(Encoding::simd(0));
             r.iter().for_each(|r0| {
                 assert!(r0 == v);
             });
