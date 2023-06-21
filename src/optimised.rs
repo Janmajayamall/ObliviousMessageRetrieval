@@ -22,6 +22,32 @@ pub fn barret_reduce_coefficients_u128(r_u128: &Array2<u128>, modq: &[Modulus]) 
     Array2::from_shape_vec((r_u128.shape()[0], r_u128.shape()[1]), v).unwrap()
 }
 
+pub fn coefficient_u128_to_ciphertext<T: Ntt>(
+    params: &Arc<BfvParameters<T>>,
+    c0_coeffs: &Array2<u128>,
+    c1_coeffs: &Array2<u128>,
+    level: usize,
+) -> Ciphertext<T> {
+    let ct_ctx = params.ciphertext_ctx_at_level(0);
+
+    Ciphertext::new(
+        vec![
+            Poly::new(
+                barret_reduce_coefficients_u128(&c0_coeffs, &ct_ctx.moduli_ops),
+                &ct_ctx,
+                Representation::Evaluation,
+            ),
+            Poly::new(
+                barret_reduce_coefficients_u128(&c1_coeffs, &ct_ctx.moduli_ops),
+                &ct_ctx,
+                Representation::Evaluation,
+            ),
+        ],
+        params.clone(),
+        level,
+    )
+}
+
 /// We can precompute these and store them somewhere. No need to change them until we change parameters.
 pub fn sub_from_one_precompute<T: traits::Ntt>(
     params: &Arc<BfvParameters<T>>,

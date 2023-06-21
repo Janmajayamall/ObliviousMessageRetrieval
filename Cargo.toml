@@ -16,3 +16,4 @@ statrs = "0.16.0"
 num-bigint-dig = {version = "0.8.2", features = ["prime"]}
 num-traits = "0.2.15"
 byteorder = "1.4.3"
+rayon = "1.7.0"

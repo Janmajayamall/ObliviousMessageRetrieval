@@ -7,13 +7,12 @@ use rand::thread_rng;
 use std::sync::Arc;
 
 use omr::{
+    client::encrypt_pvw_sk,
     optimised::sub_from_one_precompute,
     plaintext::{powers_of_x_int, powers_of_x_modulus},
+    preprocessing::pre_process_batch,
     pvw::*,
-    server::{
-        encrypt_pvw_sk, even_powers_of_x_ct, powers_of_x_ct, pre_process_batch, pvw_decrypt,
-        range_fn,
-    },
+    server::{even_powers_of_x_ct, powers_of_x_ct, pvw_decrypt, range_fn},
     utils::precompute_range_constants,
 };
 
@@ -52,6 +51,8 @@ fn level_range_fn() {
 /// 1. Pvw decrypt
 /// 2. range fn
 /// 3. muls into 1
+///
+/// TODO: Write a function that performs all pre-computation stuff and stores it
 fn phase1() {
     let mut rng = thread_rng();
     let pvw_params = Arc::new(PvwParameters::default());
@@ -153,6 +154,6 @@ fn time_dff_even_all_powers_of_x() {
 fn main() {
     // level_powers_of_x();
     // level_range_fn();
-    phase1()
-    // time_dff_even_all_powers_of_x();
+    // phase1()
+    time_dff_even_all_powers_of_x();
 }

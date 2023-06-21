@@ -1,96 +1,20 @@
+use crate::optimised::fma_reverse_u128_poly;
+use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
 use crate::{
     optimised::{
-        barret_reduce_coefficients_u128, optimised_add_range_fn, optimised_fma_with_rot,
-        optmised_range_fn_fma, sub_from_one,
+        barret_reduce_coefficients_u128, optimised_fma_with_rot, optmised_range_fn_fma,
+        sub_from_one,
     },
-    pvw::{self, PvwCiphertext, PvwParameters, PvwSecretKey},
-    utils::{decrypt_and_print, read_range_coeffs},
+    pvw::PvwParameters,
 };
 use bfv::{
-    BfvParameters, Ciphertext, Encoding, GaloisKey, Modulus, Plaintext, Poly, RelinearizationKey,
-    Representation, SecretKey,
+    BfvParameters, Ciphertext, GaloisKey, Plaintext, Poly, RelinearizationKey, Representation,
+    SecretKey,
 };
 use itertools::{izip, Itertools};
-use ndarray::{azip, s, Array2, IntoNdProducer};
-use rand::{thread_rng, CryptoRng, RngCore};
-use rand_chacha::rand_core::le;
-use std::{collections::HashMap, hint, sync::Arc, time::Instant};
+use ndarray::{s, Array2};
+use std::{collections::HashMap, sync::Arc};
 use traits::Ntt;
-
-pub fn pre_process_batch<T: Ntt>(
-    pvw_params: &Arc<PvwParameters>,
-    bfv_params: &Arc<BfvParameters<T>>,
-    hints: &[PvwCiphertext],
-) -> (Vec<Plaintext<T>>, Vec<Poly<T>>) {
-    // can only process as many as polynomial_degree hints in a batch
-    debug_assert!(hints.len() <= bfv_params.polynomial_degree);
-
-    let sec_len = pvw_params.n.next_power_of_two();
-    let mut hint_a_pts = vec![];
-    for i in 0..sec_len {
-        let mut m = vec![];
-        for j in 0..hints.len() {
-            let index = (j + i) % sec_len;
-            if index < pvw_params.n {
-                m.push(hints[j].a[index]);
-            } else {
-                m.push(0);
-            }
-        }
-        hint_a_pts.push(Plaintext::encode(&m, &bfv_params, Encoding::simd(0)));
-    }
-
-    let mut hint_b_polys = vec![];
-    let q_by4 = bfv_params.plaintext_modulus / 4;
-    for i in 0..pvw_params.ell {
-        let mut m = vec![];
-        for j in 0..hints.len() {
-            m.push(
-                bfv_params
-                    .plaintext_modulus_op
-                    .sub_mod_fast(hints[j].b[i], q_by4),
-            );
-        }
-        hint_b_polys.push(Plaintext::encode(&m, &bfv_params, Encoding::simd(0)).to_poly());
-    }
-
-    // length of plaintexts will be sec_len
-    (hint_a_pts, hint_b_polys)
-}
-
-/// Encrypts pvw sk under bfv in desired form
-pub fn encrypt_pvw_sk<R: CryptoRng + RngCore, T: Ntt>(
-    bfv_params: &Arc<BfvParameters<T>>,
-    bfv_sk: &SecretKey<T>,
-    pvw_sk: &PvwSecretKey,
-    rng: &mut R,
-) -> Vec<Ciphertext<T>> {
-    let sec_len = pvw_sk.par.n.next_power_of_two();
-    let degree = bfv_params.polynomial_degree;
-
-    // pvw_sk.key is of dimension ell x n
-    let cts = pvw_sk
-        .key
-        .outer_iter()
-        .map(|s| {
-            let mut m = vec![];
-            for i in 0..degree {
-                let index = i % sec_len;
-                if index < pvw_sk.par.n {
-                    m.push(s[index]);
-                } else {
-                    m.push(0);
-                }
-            }
-            let pt = Plaintext::encode(&m, bfv_params, Encoding::simd(0));
-            let mut ct = bfv_sk.encrypt(&pt, rng);
-            ct.change_representation(&Representation::Evaluation);
-            ct
-        })
-        .collect_vec();
-
-    cts
-}
 
 // rotate by 1 and perform plaintext mutiplication for each ell
 pub fn pvw_decrypt<T: Ntt>(
@@ -355,53 +279,82 @@ pub fn range_fn<T: Ntt>(
     sum_ct
 }
 
-/// Returns plaintexts to extract blocks of extract_size.
-///
-/// `block_size` is the size of block replicated consecutively on exisitng ciphertext.
-/// `extract_size` is the size of block that is extracted from the existing block.
-/// For example, if block_size if 32. The ciphertext text is of form [0,1,2,3,..31,0,1,2..31,....],
-/// that is [0,1,2,3...31] is replicated across the ciphertext. If extract_size is 4, the function
-/// will return 8 (32/4=8) plaintexts to extract 1st 4 from each block, 2nd 4, 3rd 4,...8th 4.
-fn procompute_expand_roll_pt<T: Ntt>(
-    block_size: usize,
-    extract_size: usize,
+pub fn expand_ciphertext_batches_and_fma<T: Ntt>(
     degree: usize,
-    params: &Arc<BfvParameters<T>>,
-) -> Vec<Plaintext<T>> {
-    let parts = block_size / extract_size;
-    let mut pts = vec![];
-    for part in 0..parts {
-        let mut m = vec![];
-        let lower = part * extract_size;
-        let higher = (part + 1) * extract_size;
-        for i in 0..degree {
-            if i % block_size >= lower && i % block_size < higher {
-                m.push(1);
-            } else {
-                m.push(0);
+    rtks: &HashMap<usize, GaloisKey<T>>,
+    pts_4_roll: &[Plaintext<T>],
+    pts_1_roll: &[Plaintext<T>],
+    pv_ct: &Ciphertext<T>,
+    pts_32: &[Plaintext<T>],
+    indices_polys: &[Poly<T>],
+    weights_polys: &[Poly<T>],
+    res00: &mut Array2<u128>,
+    res01: &mut Array2<u128>,
+    res10: &mut Array2<u128>,
+    res11: &mut Array2<u128>,
+) -> Vec<Ciphertext<T>> {
+    let mut ones = vec![];
+    pts_32.iter().enumerate().for_each(|(batch_index, pt_32)| {
+        let mut r32_ct = pv_ct * pt_32;
+
+        // populate 32 across all lanes
+        let mut i = 32;
+        while i < (degree / 2) {
+            // rot_count += 1;
+            r32_ct += &rtks.get(&i).unwrap().rotate(&r32_ct);
+            i *= 2;
+        }
+        r32_ct += &rtks.get(&(2 * degree - 1)).unwrap().rotate(&r32_ct);
+
+        // extract first 4
+        let mut fours = vec![];
+        for i in 0..8 {
+            fours.push(&r32_ct * &pts_4_roll[i]);
+        }
+
+        // expand fours
+        let mut i = 4;
+        while i < 32 {
+            for j in 0..8 {
+                // rot_count += 1;
+                let tmp = rtks.get(&i).unwrap().rotate(&fours[j]);
+                fours[j] += &tmp;
+            }
+            i *= 2;
+        }
+
+        // extract ones
+        for i in 0..8 {
+            let four = &fours[i];
+            for j in 0..4 {
+                ones.push(four * &pts_1_roll[j]);
             }
         }
-        pts.push(Plaintext::encode(&m, params, Encoding::simd(0)));
-    }
-    pts
-}
 
-fn precompute_expand_32_roll_pt<T: Ntt>(
-    degree: usize,
-    params: &Arc<BfvParameters<T>>,
-) -> Vec<Plaintext<T>> {
-    assert!(degree >= 32);
-
-    let mut pts = vec![];
-    for i in 0..(degree / 32) {
-        let mut m = vec![0; degree];
-        for j in (32 * i)..(32 * (i + 1)) {
-            m[j] = 1u64;
+        // expand ones
+        let mut i = 1;
+        while i < 4 {
+            let key = rtks.get(&i).unwrap();
+            for j in (batch_index * 32)..(batch_index + 1) * 32 {
+                // rot_count += 1;
+                let tmp = key.rotate(&ones[j]);
+                ones[j] += &tmp;
+            }
+            i *= 2;
         }
-        pts.push(Plaintext::encode(&m, params, Encoding::simd(0)));
-    }
+    });
 
-    pts
+    izip!(ones.iter(), indices_polys.iter(), weights_polys.iter()).for_each(|(o, i, w)| {
+        // indices
+        fma_reverse_u128_poly(res00, &o.c_ref()[0], i);
+        fma_reverse_u128_poly(res01, &o.c_ref()[1], i);
+
+        // weights
+        fma_reverse_u128_poly(res10, &o.c_ref()[0], w);
+        fma_reverse_u128_poly(res11, &o.c_ref()[1], w);
+    });
+
+    ones
 }
 
 pub fn expand_pertinency_vector<T: Ntt>(
@@ -413,93 +366,39 @@ pub fn expand_pertinency_vector<T: Ntt>(
 ) -> Vec<Ciphertext<T>> {
     // extract first 32
     let pts_32 = precompute_expand_32_roll_pt(degree, bfv_params);
+    let (pts_32, _) = pts_32.split_at(8);
     // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
     let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, bfv_params);
     // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
     let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, bfv_params);
 
-    let mut rot_count = 0;
+    // let mut rot_count = 0;
+    let mut res = vec![];
+
+    dbg!(rayon::current_num_threads());
 
     let now = std::time::Instant::now();
-    let mut res = vec![];
-    for index in 0..(degree / 32) {
-        let mut r32_ct = pv_ct * &pts_32[index];
+    let num_threads = rayon::current_num_threads();
+    let batch_size = pts_32.len() / num_threads;
+    let pts_32_chunks = pts_32.chunks_exact(batch_size);
+    rayon::scope(|s| {
+        pts_32_chunks.into_iter().for_each(|pts_32_chunk| {
+            s.spawn(|_| {
+                // let index = &i.clone();
+                // let _ = expand_ciphertext_batches_and_fma(
+                //     degree,
+                //     rtks,
+                //     &pts_4_roll,
+                //     &pts_1_roll,
+                //     pv_ct,
+                //     pts_32_chunk,
+                // );
+            });
+        });
+    });
 
-        // populate 32 across all lanes
-        let mut i = 32;
-        while i < (degree / 2) {
-            rot_count += 1;
-            r32_ct += &rtks.get(&i).unwrap().rotate(&r32_ct);
-            i *= 2;
-        }
-        r32_ct += &rtks.get(&(2 * degree - 1)).unwrap().rotate(&r32_ct);
-
-        // {
-        //     println!("{:?}", sk.decrypt(&r32_ct).decode(Encoding::simd(0)));
-        // }
-
-        // extract first 4
-        let mut fours = vec![];
-        for i in 0..8 {
-            fours.push(&r32_ct * &pts_4_roll[i]);
-        }
-
-        // {
-        //     fours.iter().for_each(|ct| {
-        //         println!("{:?}", sk.decrypt(ct).decode(Encoding::simd(0)));
-        //         println!();
-        //     })
-        // }
-
-        // expand fours
-        let mut i = 4;
-        while i < 32 {
-            for j in 0..8 {
-                rot_count += 1;
-                let tmp = rtks.get(&i).unwrap().rotate(&fours[j]);
-                fours[j] += &tmp;
-            }
-            i *= 2;
-        }
-
-        // {
-        //     fours.iter().for_each(|ct| {
-        //         println!("{:?}", sk.decrypt(ct).decode(Encoding::simd(0)));
-        //         println!();
-        //     })
-        // }
-
-        // let mut finals = vec![];
-        for i in 0..8 {
-            let four = &fours[i];
-
-            let mut ones = vec![];
-            for j in 0..4 {
-                ones.push(four * &pts_1_roll[j]);
-            }
-
-            // {
-            //     ones.iter().for_each(|ct| {
-            //         println!("{:?}", sk.decrypt(ct).decode(Encoding::simd(0)));
-            //         println!();
-            //     })
-            // }
-
-            let mut j = 1;
-            while j < 4 {
-                for k in 0..4 {
-                    rot_count += 1;
-                    let tmp = rtks.get(&j).unwrap().rotate(&ones[k]);
-                    ones[k] += &tmp;
-                }
-                j *= 2;
-            }
-            res.extend(ones)
-        }
-        // let finals = finals.concat();
-    }
     println!("Time: {:?}", now.elapsed());
-    println!("Rot count: {rot_count}");
+    // println!("Rot count: {rot_count}");
     res
     // expand 32 into
 }
@@ -508,10 +407,14 @@ pub fn expand_pertinency_vector<T: Ntt>(
 mod tests {
     use super::*;
     use crate::{
-        optimised::sub_from_one_precompute, plaintext::powers_of_x_modulus,
+        client::gen_pv_exapnd_rtgs,
+        optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
+        plaintext::powers_of_x_modulus,
+        preprocessing::precompute_indices_pts,
         utils::precompute_range_constants,
     };
-    use bfv::{utils::rot_to_galois_element, BfvParameters};
+    use bfv::{plaintext::Encoding, BfvParameters};
+    use rand::thread_rng;
 
     #[test]
     fn range_fn_works() {
@@ -603,45 +506,18 @@ mod tests {
 
     #[test]
     fn test_expand_pertinency_vector() {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(8)
+            .build_global()
+            .unwrap();
+
         let mut rng = thread_rng();
-        let params = Arc::new(BfvParameters::default(2, 1 << 15));
+        let params = Arc::new(BfvParameters::default(3, 1 << 15));
         let ct_ctx = params.ciphertext_ctx_at_level(0);
         let sk = SecretKey::random(&params, &mut rng);
 
         // create galois keys
-        let mut rtks = HashMap::new();
-
-        // keys for 32 expand
-        let mut i = 32;
-        while i < params.polynomial_degree {
-            let exponent = rot_to_galois_element(i as isize, params.polynomial_degree);
-            let key = GaloisKey::new(exponent, &ct_ctx, &sk, &mut rng);
-            rtks.insert(i, key);
-            i *= 2;
-        }
-        // row swap
-        rtks.insert(
-            2 * params.polynomial_degree - 1,
-            GaloisKey::new(2 * params.polynomial_degree - 1, &ct_ctx, &sk, &mut rng),
-        );
-
-        // keys for 4 expand
-        let mut i = 4;
-        while i < 32 {
-            let exponent = rot_to_galois_element(i as isize, params.polynomial_degree);
-            let key = GaloisKey::new(exponent, &ct_ctx, &sk, &mut rng);
-            rtks.insert(i, key);
-            i *= 2;
-        }
-
-        // keys for 1 expand
-        let mut i = 1;
-        while i < 4 {
-            let exponent = rot_to_galois_element(i as isize, params.polynomial_degree);
-            let key = GaloisKey::new(exponent, &ct_ctx, &sk, &mut rng);
-            rtks.insert(i, key);
-            i *= 2;
-        }
+        let mut rtks = gen_pv_exapnd_rtgs(&params, &sk);
 
         let m = (0..params.polynomial_degree)
             .into_iter()
@@ -654,21 +530,89 @@ mod tests {
         let expanded_cts =
             expand_pertinency_vector(&params, params.polynomial_degree, &ct, &rtks, &sk);
 
-        assert!(expanded_cts.len() == params.polynomial_degree);
-        let first_noise = sk.measure_noise(&expanded_cts.first().unwrap(), &mut rng);
-        println!("First Noise: {first_noise}");
-        expanded_cts.iter().enumerate().for_each(|(index, ct)| {
-            // noise of all ciphertexts must in range +-4
-            let noise = sk.measure_noise(&ct, &mut rng);
-            if noise > first_noise + 4 || noise < first_noise - 4 {
-                println!("Outlier noise for {index}: {noise}");
-            }
+        // assert!(expanded_cts.len() == params.polynomial_degree);
+        // let first_noise = sk.measure_noise(&expanded_cts.first().unwrap(), &mut rng);
+        // println!("First Noise: {first_noise}");
+        // expanded_cts.iter().enumerate().for_each(|(index, ct)| {
+        //     // noise of all ciphertexts must in range +-4
+        //     let noise = sk.measure_noise(&ct, &mut rng);
+        //     if noise > first_noise + 4 || noise < first_noise - 4 {
+        //         println!("Outlier noise for {index}: {noise}");
+        //     }
 
-            let m = sk.decrypt(ct).decode(Encoding::simd(1));
-            // if m != vec![index as u64; params.polynomial_degree] {
-            //     println!("{:?}", m);
-            // }
-            assert!(m == vec![index as u64; params.polynomial_degree]);
+        //     let m = sk.decrypt(ct).decode(Encoding::simd(1));
+        //     // if m != vec![index as u64; params.polynomial_degree] {
+        //     //     println!("{:?}", m);
+        //     // }
+        //     assert!(m == vec![index as u64; params.polynomial_degree]);
+        // });
+    }
+
+    #[test]
+    fn test_expand_ciphertext_batches_and_fma() {
+        let mut rng = thread_rng();
+        let params = Arc::new(BfvParameters::default(3, 1 << 15));
+        let sk = SecretKey::random(&params, &mut rng);
+        let degree = params.polynomial_degree;
+        let m = vec![3; params.polynomial_degree];
+        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
+        let mut ct = sk.encrypt(&pt, &mut rng);
+        ct.change_representation(&Representation::Evaluation);
+
+        let rtks = gen_pv_exapnd_rtgs(&params, &sk);
+
+        let pts_32 = precompute_expand_32_roll_pt(degree, &params);
+        // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
+        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &params);
+        // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
+        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &params);
+
+        // polys for fma
+        let indices_polys = precompute_indices_pts(&params, 0, 32);
+        let weight_polys = precompute_indices_pts(&params, 0, 32);
+
+        // restrict to single batch
+        let pts_32 = vec![pts_32[0].clone()];
+        let indices_polys = &indices_polys[..32];
+        let weight_polys = &weight_polys[..32];
+        dbg!(std::mem::size_of_val(indices_polys));
+
+        let mut indices_res0 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
+        let mut indices_res1 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
+        let mut weights_res0 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
+        let mut weights_res1 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
+        dbg!(pts_32.len());
+
+        let now = std::time::Instant::now();
+        let ones = expand_ciphertext_batches_and_fma(
+            params.polynomial_degree,
+            &rtks,
+            &pts_4_roll,
+            &pts_1_roll,
+            &ct,
+            &pts_32,
+            indices_polys,
+            weight_polys,
+            &mut indices_res0,
+            &mut indices_res1,
+            &mut weights_res0,
+            &mut weights_res1,
+        );
+        println!("Time: {:?}", now.elapsed());
+
+        // TODO test FMA of indices and weights
+        let indices_ct = coefficient_u128_to_ciphertext(&params, &indices_res0, &indices_res1, 0);
+        let weights_ct = coefficient_u128_to_ciphertext(&params, &weights_res0, &weights_res1, 0);
+        // let c0 = ;
+
+        dbg!(sk.measure_noise(&indices_ct, &mut rng));
+
+        assert!(ones.len() == 32);
+
+        ones.iter().for_each(|ct| {
+            dbg!(sk.measure_noise(ct, &mut rng));
+            let rm = sk.decrypt(ct).decode(Encoding::simd(0));
+            assert!(rm == m);
         });
     }
 
