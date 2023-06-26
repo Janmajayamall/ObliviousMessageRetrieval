@@ -1,15 +1,16 @@
-use crate::optimised::fma_reverse_u128_poly;
+use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
+use crate::utils::decrypt_and_print;
 use crate::{
     optimised::{
-        barret_reduce_coefficients_u128, optimised_fma_with_rot, optmised_range_fn_fma,
+        barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, optmised_range_fn_fma,
         sub_from_one,
     },
     pvw::PvwParameters,
 };
 use bfv::{
-    BfvParameters, Ciphertext, GaloisKey, Plaintext, Poly, RelinearizationKey, Representation,
-    SecretKey,
+    BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyType,
+    RelinearizationKey, Representation, SecretKey,
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
@@ -17,14 +18,15 @@ use std::{collections::HashMap, sync::Arc};
 use traits::Ntt;
 
 // rotate by 1 and perform plaintext mutiplication for each ell
-pub fn pvw_decrypt<T: Ntt>(
+pub fn pvw_decrypt(
     pvw_params: &Arc<PvwParameters>,
-    hint_a_pts: &[Plaintext<T>],
-    hint_b_pts: &[Poly<T>],
-    pvw_sk_cts: &Vec<Ciphertext<T>>,
-    rtk: &GaloisKey<T>,
-    sk: &SecretKey<T>,
-) -> Vec<Ciphertext<T>> {
+    evaluator: &Evaluator,
+    hint_a_pts: &[Plaintext],
+    hint_b_pts: &[Poly],
+    pvw_sk_cts: &[Ciphertext],
+    rtg: &GaloisKey,
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
     let sec_len = pvw_params.n.next_power_of_two();
     debug_assert!(hint_a_pts.len() == sec_len);
     debug_assert!(hint_b_pts.len() == pvw_params.ell);
@@ -45,7 +47,9 @@ pub fn pvw_decrypt<T: Ntt>(
     // let mut d = vec![];
     let mut sk_a = pvw_sk_cts
         .into_iter()
-        .map(|s_ct| optimised_fma_with_rot(s_ct, hint_a_pts, sec_len, rtk, sk))
+        .map(|s_ct| {
+            optimised_pvw_fma_with_rot(evaluator.params(), s_ct, hint_a_pts, sec_len, rtg, sk)
+        })
         .collect_vec();
 
     // {
@@ -55,18 +59,20 @@ pub fn pvw_decrypt<T: Ntt>(
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
         // FIXME: Wo don't need this
-        sa.sub_reversed_inplace(b);
+        evaluator.sub_ciphertext_from_poly_inplace(sa, b);
     });
 
     sk_a
 }
 
-pub fn powers_of_x_ct<T: Ntt>(
-    x: &Ciphertext<T>,
-    rlk: &RelinearizationKey<T>,
-    sk: &SecretKey<T>,
-) -> Vec<Ciphertext<T>> {
-    let mut values = vec![Ciphertext::zero(&x.params(), x.level()); 256];
+pub fn powers_of_x_ct(
+    x: &Ciphertext,
+    evaluator: &Evaluator,
+    ek: &EvaluationKey,
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
+    let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
+    let mut values = vec![dummy; 256];
     let mut calculated = vec![0u64; 256];
     values[0] = x.clone();
     calculated[0] = 1;
@@ -83,8 +89,8 @@ pub fn powers_of_x_ct<T: Ntt>(
                 res_deg += base_deg;
                 if res_deg != base_deg && calculated[res_deg - 1] == 0 {
                     // let now = Instant::now();
-                    let tmp = values[p_res_deg - 1].multiply1(&values[base_deg - 1]);
-                    values[res_deg - 1] = rlk.relinearize(&tmp);
+                    let tmp = evaluator.mul(&values[p_res_deg - 1], &values[base_deg - 1]);
+                    values[res_deg - 1] = evaluator.relinearize(&tmp, ek);
                     // println!("Res deg time: {:?}", now.elapsed());
                     calculated[res_deg - 1] = 1;
                     // mul_count += 1;
@@ -96,8 +102,8 @@ pub fn powers_of_x_ct<T: Ntt>(
                 base_deg *= 2;
                 if calculated[base_deg - 1] == 0 {
                     // let now = Instant::now();
-                    let tmp = values[p_base_deg - 1].multiply1(&values[p_base_deg - 1]);
-                    values[base_deg - 1] = rlk.relinearize(&tmp);
+                    let tmp = evaluator.mul(&values[p_base_deg - 1], &values[p_base_deg - 1]);
+                    values[base_deg - 1] = evaluator.relinearize(&tmp, ek);
 
                     // unsafe {
                     //     decrypt_and_print(
@@ -120,17 +126,19 @@ pub fn powers_of_x_ct<T: Ntt>(
     values
 }
 
-pub fn even_powers_of_x_ct<T: Ntt>(
-    x: &Ciphertext<T>,
-    rlk: &RelinearizationKey<T>,
-    sk: &SecretKey<T>,
-) -> Vec<Ciphertext<T>> {
-    let mut values = vec![Ciphertext::zero(&x.params(), x.level()); 128];
+pub fn even_powers_of_x_ct(
+    x: &Ciphertext,
+    evaluator: &Evaluator,
+    ek: &EvaluationKey,
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
+    let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
+    let mut values = vec![dummy; 128];
     let mut calculated = vec![0u64; 128];
 
     // x^2
-    let tmp = x.multiply1(x);
-    values[0] = rlk.relinearize(&tmp);
+    let tmp = evaluator.mul(x, x);
+    values[0] = evaluator.relinearize(&tmp, ek);
     calculated[0] = 1;
     let mut mul_count = 0;
 
@@ -146,8 +154,8 @@ pub fn even_powers_of_x_ct<T: Ntt>(
                 res_deg += base_deg;
                 if res_deg != base_deg && calculated[res_deg / 2 - 1] == 0 {
                     // let now = Instant::now();
-                    let tmp = values[p_res_deg / 2 - 1].multiply1(&values[base_deg / 2 - 1]);
-                    values[res_deg / 2 - 1] = rlk.relinearize(&tmp);
+                    let tmp = evaluator.mul(&values[p_res_deg / 2 - 1], &values[base_deg / 2 - 1]);
+                    values[res_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
                     // println!("Res deg time: {:?}", now.elapsed());
                     calculated[res_deg / 2 - 1] = 1;
                     // mul_count += 1;
@@ -159,8 +167,9 @@ pub fn even_powers_of_x_ct<T: Ntt>(
                 base_deg *= 2;
                 if calculated[base_deg / 2 - 1] == 0 {
                     // let now = Instant::now();
-                    let tmp = values[p_base_deg / 2 - 1].multiply1(&values[p_base_deg / 2 - 1]);
-                    values[base_deg / 2 - 1] = rlk.relinearize(&tmp);
+                    let tmp =
+                        evaluator.mul(&values[p_base_deg / 2 - 1], &values[p_base_deg / 2 - 1]);
+                    values[base_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
 
                     // unsafe {
                     //     decrypt_and_print(
@@ -183,27 +192,28 @@ pub fn even_powers_of_x_ct<T: Ntt>(
     values
 }
 
-pub fn range_fn<T: Ntt>(
-    ct: &Ciphertext<T>,
-    rlk: &RelinearizationKey<T>,
+pub fn range_fn(
+    ct: &Ciphertext,
+    evaluator: &Evaluator,
+    ek: &EvaluationKey,
     constants: &Array2<u64>,
     sub_from_one_precompute: &[u64],
-    sk: &SecretKey<T>,
-) -> Ciphertext<T> {
+    sk: &SecretKey,
+) -> Ciphertext {
     // let mut now = Instant::now();
-    let mut single_powers = even_powers_of_x_ct(ct, rlk, sk);
+    let mut single_powers = even_powers_of_x_ct(ct, evaluator, ek, sk);
     // println!("single_powers: {:?}", now.elapsed());
     // decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
 
     // now = Instant::now();
-    let double_powers = powers_of_x_ct(&single_powers[127], rlk, sk);
+    let double_powers = powers_of_x_ct(&single_powers[127], evaluator, ek, sk);
     // println!("double_powers: {:?}", now.elapsed());
     // decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
 
     // change to evaluation for plaintext multiplication
     // now = Instant::now();
     single_powers.iter_mut().for_each(|ct| {
-        ct.change_representation(&Representation::Evaluation);
+        evaluator.ciphertext_change_representation(ct, Representation::Evaluation);
     });
     // println!(
     //     "single_powers coefficient to evaluation: {:?}",
@@ -211,18 +221,16 @@ pub fn range_fn<T: Ntt>(
     // );
 
     let level = 0;
-    let bfv_params = ct.params();
-    let q_ctx = bfv_params.ciphertext_ctx_at_level(level);
-    let q_size = q_ctx.moduli.len();
+    let q_ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
 
     // when i = 0, we skip multiplication and cache the result
-    let mut left_over_ct = Ciphertext::zero(&bfv_params, level);
-    let mut sum_ct = Ciphertext::zero(&bfv_params, level);
+    let mut left_over_ct = Ciphertext::new(vec![], PolyType::Q, 0);
+    let mut sum_ct = Ciphertext::new(vec![], PolyType::Q, 0);
 
     // now = Instant::now();
     for i in 0..256 {
-        let mut res0_u128 = Array2::<u128>::zeros((q_size, ct.params().polynomial_degree));
-        let mut res1_u128 = Array2::<u128>::zeros((q_size, ct.params().polynomial_degree));
+        let mut res0_u128 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
+        let mut res1_u128 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
 
         // let mut inner_now = Instant::now();
         // Starting from 0th index every alternate constant is 0. Since plintext multiplication by 0 is 0, we don't need to
@@ -240,18 +248,8 @@ pub fn range_fn<T: Ntt>(
             );
         }
 
-        let p_res0 = Poly::new(
-            barret_reduce_coefficients_u128(&res0_u128, &q_ctx.moduli_ops),
-            &q_ctx,
-            Representation::Evaluation,
-        );
-        let p_res1 = Poly::new(
-            barret_reduce_coefficients_u128(&res1_u128, &q_ctx.moduli_ops),
-            &q_ctx,
-            Representation::Evaluation,
-        );
-
-        let res_ct = Ciphertext::new(vec![p_res0, p_res1], ct.params(), level);
+        let res_ct =
+            coefficient_u128_to_ciphertext(evaluator.params(), &res0_u128, &res1_u128, level);
         // println!("Inner scalar product {i}: {:?}", inner_now.elapsed());
         // decrypt_and_print(&res_ct, sk, &format!("Inner scalar product {i}"));
 
@@ -259,57 +257,66 @@ pub fn range_fn<T: Ntt>(
         if i == 0 {
             left_over_ct = res_ct;
             // convert  ct to coefficient form
-            left_over_ct.change_representation(&Representation::Coefficient);
+            evaluator
+                .ciphertext_change_representation(&mut left_over_ct, Representation::Coefficient);
         } else if i == 1 {
             // multiply1_lazy returns in evaluation form
-            sum_ct = res_ct.multiply1_lazy(&double_powers[i - 1]);
+            sum_ct = evaluator.mul_lazy(&res_ct, &double_powers[i - 1]);
         } else {
-            sum_ct += &res_ct.multiply1_lazy(&double_powers[i - 1]);
+            evaluator.add_assign(
+                &mut sum_ct,
+                &evaluator.mul_lazy(&res_ct, &double_powers[i - 1]),
+            );
         }
     }
 
-    sum_ct.scale_and_round();
-    let mut sum_ct = rlk.relinearize(&sum_ct);
-    sum_ct += &left_over_ct;
+    let sum_ct = evaluator.scale_and_round(&mut sum_ct);
+
+    let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
+    evaluator.add_assign(&mut sum_ct, &left_over_ct);
     // println!("Outer summation: {:?}", now.elapsed());
     // decrypt_and_print(&sum_ct, sk, "Outer smmation");
 
     // implement optimised 1 - sum_ct
-    sub_from_one(&mut sum_ct, sub_from_one_precompute);
+    sub_from_one(evaluator.params(), &mut sum_ct, sub_from_one_precompute);
     sum_ct
 }
 
-pub fn expand_ciphertext_batches_and_fma<T: Ntt>(
-    degree: usize,
-    rtks: &HashMap<usize, GaloisKey<T>>,
-    pts_4_roll: &[Plaintext<T>],
-    pts_1_roll: &[Plaintext<T>],
-    pv_ct: &Ciphertext<T>,
-    pts_32: &[Plaintext<T>],
-    indices_polys: &[Poly<T>],
-    weights_polys: &[Poly<T>],
+pub fn expand_ciphertext_batches_and_fma(
+    ek: &EvaluationKey,
+    evaluator: &Evaluator,
+    pts_4_roll: &[Plaintext],
+    pts_1_roll: &[Plaintext],
+    pv_ct: &Ciphertext,
+    pts_32: &[Plaintext],
+    indices_polys: &[Poly],
+    weights_polys: &[Poly],
     res00: &mut Array2<u128>,
     res01: &mut Array2<u128>,
     res10: &mut Array2<u128>,
     res11: &mut Array2<u128>,
-) -> Vec<Ciphertext<T>> {
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
+    let degree = evaluator.params().degree as isize;
     let mut ones = vec![];
     pts_32.iter().enumerate().for_each(|(batch_index, pt_32)| {
-        let mut r32_ct = pv_ct * pt_32;
+        let mut r32_ct = evaluator.mul_poly(pv_ct, pt_32.poly_ntt_ref());
 
         // populate 32 across all lanes
         let mut i = 32;
         while i < (degree / 2) {
             // rot_count += 1;
-            r32_ct += &rtks.get(&i).unwrap().rotate(&r32_ct);
+            let tmp = evaluator.rotate(&r32_ct, i, ek);
+            evaluator.add_assign(&mut r32_ct, &tmp);
             i *= 2;
         }
-        r32_ct += &rtks.get(&(2 * degree - 1)).unwrap().rotate(&r32_ct);
+        let tmp = evaluator.rotate(&r32_ct, 2 * degree - 1, ek);
+        evaluator.add_assign(&mut r32_ct, &tmp);
 
         // extract first 4
         let mut fours = vec![];
         for i in 0..8 {
-            fours.push(&r32_ct * &pts_4_roll[i]);
+            fours.push(evaluator.mul_poly(&r32_ct, pts_4_roll[i].poly_ntt_ref()));
         }
 
         // expand fours
@@ -317,8 +324,8 @@ pub fn expand_ciphertext_batches_and_fma<T: Ntt>(
         while i < 32 {
             for j in 0..8 {
                 // rot_count += 1;
-                let tmp = rtks.get(&i).unwrap().rotate(&fours[j]);
-                fours[j] += &tmp;
+                let tmp = evaluator.rotate(&mut fours[j], i, ek);
+                evaluator.add_assign(&mut fours[j], &tmp);
             }
             i *= 2;
         }
@@ -327,18 +334,17 @@ pub fn expand_ciphertext_batches_and_fma<T: Ntt>(
         for i in 0..8 {
             let four = &fours[i];
             for j in 0..4 {
-                ones.push(four * &pts_1_roll[j]);
+                ones.push(evaluator.mul_poly(four, pts_1_roll[j].poly_ntt_ref()));
             }
         }
 
         // expand ones
         let mut i = 1;
         while i < 4 {
-            let key = rtks.get(&i).unwrap();
             for j in (batch_index * 32)..(batch_index + 1) * 32 {
                 // rot_count += 1;
-                let tmp = key.rotate(&ones[j]);
-                ones[j] += &tmp;
+                let tmp = evaluator.rotate(&ones[j], i, ek);
+                evaluator.add_assign(&mut ones[j], &tmp);
             }
             i *= 2;
         }
@@ -357,20 +363,20 @@ pub fn expand_ciphertext_batches_and_fma<T: Ntt>(
     ones
 }
 
-pub fn expand_pertinency_vector<T: Ntt>(
-    bfv_params: &Arc<BfvParameters<T>>,
+pub fn expand_pertinency_vector(
+    evaluator: &Evaluator,
     degree: usize,
-    pv_ct: &Ciphertext<T>,
-    rtks: &HashMap<usize, GaloisKey<T>>,
-    sk: &SecretKey<T>,
-) -> Vec<Ciphertext<T>> {
+    pv_ct: &Ciphertext,
+    ek: &EvaluationKey,
+    sk: &SecretKey,
+) -> Vec<Ciphertext> {
     // extract first 32
-    let pts_32 = precompute_expand_32_roll_pt(degree, bfv_params);
+    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator);
     let (pts_32, _) = pts_32.split_at(8);
     // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, bfv_params);
+    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator);
     // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, bfv_params);
+    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator);
 
     // let mut rot_count = 0;
     let mut res = vec![];
@@ -405,6 +411,8 @@ pub fn expand_pertinency_vector<T: Ntt>(
 
 #[cfg(test)]
 mod tests {
+    use std::{ascii::escape_default, f32::consts::E};
+
     use super::*;
     use crate::{
         client::gen_pv_exapnd_rtgs,
@@ -413,34 +421,42 @@ mod tests {
         preprocessing::precompute_indices_pts,
         utils::precompute_range_constants,
     };
-    use bfv::{plaintext::Encoding, BfvParameters};
+    use bfv::{BfvParameters, Encoding};
     use rand::thread_rng;
 
     #[test]
     fn range_fn_works() {
-        let params = Arc::new(BfvParameters::default(15, 1 << 15));
-        let ctx = params.ciphertext_ctx_at_level(0);
+        let params = BfvParameters::default(10, 1 << 3);
+        let level = 0;
+        let ctx = params.poly_ctx(&PolyType::Q, level);
 
         let mut rng = thread_rng();
         let constants = precompute_range_constants(&ctx);
-        let sub_one_precompute = sub_from_one_precompute(&params, 0);
+        let sub_one_precompute = sub_from_one_precompute(&params, level);
 
-        let sk = SecretKey::random(&params, &mut rng);
+        let sk = SecretKey::random(params.degree, &mut rng);
         let mut m = params
             .plaintext_modulus_op
-            .random_vec(params.polynomial_degree, &mut rng);
-        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-        let mut ct = sk.encrypt(&pt, &mut rng);
+            .random_vec(params.degree, &mut rng);
 
-        // gen rlk
-        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+        let evaluator = Evaluator::new(params);
+        let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+        // gen evaluation key
+        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
 
         let now = std::time::Instant::now();
-        let ct_res = range_fn(&ct, &rlk, &constants, &sub_one_precompute, &sk);
+        let ct_res = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
         let time = now.elapsed();
-        dbg!(time);
-        dbg!(sk.measure_noise(&ct_res, &mut rng));
-        let res = sk.decrypt(&ct_res).decode(Encoding::simd(0));
+
+        println!(
+            "Time: {:?}, Noise: {}",
+            time,
+            evaluator.measure_noise(&sk, &ct_res)
+        );
+
+        let res = evaluator.plaintext_decode(&evaluator.decrypt(&sk, &ct_res), Encoding::default());
 
         izip!(res.iter(), m.iter()).for_each(|(r, e)| {
             if (*e <= 850 || *e >= (65537 - 850)) {
@@ -454,28 +470,30 @@ mod tests {
     #[test]
     fn powers_of_x_ct_works() {
         let mut rng = thread_rng();
-        let params = Arc::new(BfvParameters::default(15, 1 << 15));
-        let sk = SecretKey::random(&params, &mut rng);
-        let m = vec![3; params.polynomial_degree];
-        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-        let ct = sk.encrypt(&pt, &mut rng);
-        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+        let params = BfvParameters::default(5, 1 << 3);
+        let sk = SecretKey::random(params.degree, &mut rng);
+        let m = vec![3; params.degree];
+
+        let evaluator = Evaluator::new(params);
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let ct = evaluator.encrypt(&sk, &pt, &mut rng);
+        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
 
         {
             for _ in 0..1 {
-                powers_of_x_ct(&ct, &rlk, &sk);
+                powers_of_x_ct(&ct, &evaluator, &ek, &sk);
             }
         }
 
         let now = std::time::Instant::now();
-        let powers_ct = powers_of_x_ct(&ct, &rlk, &sk);
+        let powers_ct = powers_of_x_ct(&ct, &evaluator, &ek, &sk);
         println!("Time = {:?}", now.elapsed());
 
-        let res_values_mod = powers_of_x_modulus(3, &params.plaintext_modulus_op);
+        let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op);
 
         izip!(powers_ct.iter(), res_values_mod.iter()).for_each(|(pct, v)| {
-            dbg!(sk.measure_noise(pct, &mut rng));
-            let r = sk.decrypt(pct).decode(Encoding::simd(0));
+            dbg!(evaluator.measure_noise(&sk, pct));
+            let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, pct), Encoding::default());
             r.iter().for_each(|r0| {
                 assert!(r0 == v);
             });
@@ -485,19 +503,30 @@ mod tests {
     #[test]
     fn even_powers_of_x_ct_works() {
         let mut rng = thread_rng();
-        let params = Arc::new(BfvParameters::default(10, 1 << 15));
-        let sk = SecretKey::random(&params, &mut rng);
-        let m = vec![3; params.polynomial_degree];
-        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-        let ct = sk.encrypt(&pt, &mut rng);
-        let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
+        let params = BfvParameters::default(5, 1 << 3);
+        let sk = SecretKey::random(params.degree, &mut rng);
+        let m = vec![3; params.degree];
 
-        let powers = even_powers_of_x_ct(&ct, &rlk, &sk);
-        let res_values_mod = powers_of_x_modulus(3, &params.plaintext_modulus_op);
+        let evaluator = Evaluator::new(params);
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let ct = evaluator.encrypt(&sk, &pt, &mut rng);
+        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
 
-        izip!(res_values_mod.iter().skip(1).step_by(2), powers.iter()).for_each(|(v, v_ct)| {
-            dbg!(sk.measure_noise(v_ct, &mut rng));
-            let r = sk.decrypt(v_ct).decode(Encoding::simd(0));
+        {
+            for _ in 0..1 {
+                even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
+            }
+        }
+
+        let now = std::time::Instant::now();
+        let powers_ct = even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
+        println!("Time = {:?}", now.elapsed());
+
+        let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op);
+
+        izip!(res_values_mod.iter().skip(1).step_by(2), powers_ct.iter()).for_each(|(v, v_ct)| {
+            dbg!(evaluator.measure_noise(&sk, v_ct));
+            let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, v_ct), Encoding::default());
             r.iter().for_each(|r0| {
                 assert!(r0 == v);
             });
@@ -512,23 +541,23 @@ mod tests {
             .unwrap();
 
         let mut rng = thread_rng();
-        let params = Arc::new(BfvParameters::default(3, 1 << 15));
-        let ct_ctx = params.ciphertext_ctx_at_level(0);
-        let sk = SecretKey::random(&params, &mut rng);
+        let params = BfvParameters::default(3, 1 << 15);
+        let sk = SecretKey::random(params.degree, &mut rng);
 
         // create galois keys
-        let mut rtks = gen_pv_exapnd_rtgs(&params, &sk);
+        let mut ek = gen_pv_exapnd_rtgs(&params, &sk);
 
-        let m = (0..params.polynomial_degree)
+        let m = (0..params.degree)
             .into_iter()
             .map(|index| index as u64)
             .collect_vec();
-        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-        let mut ct = sk.encrypt(&pt, &mut rng);
-        ct.change_representation(&Representation::Evaluation);
+        let evaluator = Evaluator::new(params);
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
         let expanded_cts =
-            expand_pertinency_vector(&params, params.polynomial_degree, &ct, &rtks, &sk);
+            expand_pertinency_vector(&evaluator, evaluator.params().degree, &ct, &ek, &sk);
 
         // assert!(expanded_cts.len() == params.polynomial_degree);
         // let first_noise = sk.measure_noise(&expanded_cts.first().unwrap(), &mut rng);
@@ -551,25 +580,27 @@ mod tests {
     #[test]
     fn test_expand_ciphertext_batches_and_fma() {
         let mut rng = thread_rng();
-        let params = Arc::new(BfvParameters::default(3, 1 << 15));
-        let sk = SecretKey::random(&params, &mut rng);
-        let degree = params.polynomial_degree;
-        let m = vec![3; params.polynomial_degree];
-        let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-        let mut ct = sk.encrypt(&pt, &mut rng);
-        ct.change_representation(&Representation::Evaluation);
+        let params = BfvParameters::default(3, 1 << 15);
+        let sk = SecretKey::random(params.degree, &mut rng);
+        let degree = params.degree;
+        let m = vec![3; params.degree];
 
-        let rtks = gen_pv_exapnd_rtgs(&params, &sk);
+        let ek = gen_pv_exapnd_rtgs(&params, &sk);
 
-        let pts_32 = precompute_expand_32_roll_pt(degree, &params);
+        let evaluator = Evaluator::new(params);
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
+
+        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator);
         // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &params);
+        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator);
         // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &params);
+        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator);
 
         // polys for fma
-        let indices_polys = precompute_indices_pts(&params, 0, 32);
-        let weight_polys = precompute_indices_pts(&params, 0, 32);
+        let indices_polys = precompute_indices_pts(&evaluator, 0, 32);
+        let weight_polys = precompute_indices_pts(&evaluator, 0, 32);
 
         // restrict to single batch
         let pts_32 = vec![pts_32[0].clone()];
@@ -577,16 +608,17 @@ mod tests {
         let weight_polys = &weight_polys[..32];
         dbg!(std::mem::size_of_val(indices_polys));
 
-        let mut indices_res0 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
-        let mut indices_res1 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
-        let mut weights_res0 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
-        let mut weights_res1 = Array2::<u128>::zeros((params.ciphertext_moduli.len(), degree));
+        let moduli_count = evaluator.params().poly_ctx(&PolyType::Q, 0).moduli_count();
+        let mut indices_res0 = Array2::<u128>::zeros((moduli_count, degree));
+        let mut indices_res1 = Array2::<u128>::zeros((moduli_count, degree));
+        let mut weights_res0 = Array2::<u128>::zeros((moduli_count, degree));
+        let mut weights_res1 = Array2::<u128>::zeros((moduli_count, degree));
         dbg!(pts_32.len());
 
         let now = std::time::Instant::now();
         let ones = expand_ciphertext_batches_and_fma(
-            params.polynomial_degree,
-            &rtks,
+            &ek,
+            &evaluator,
             &pts_4_roll,
             &pts_1_roll,
             &ct,
@@ -597,21 +629,25 @@ mod tests {
             &mut indices_res1,
             &mut weights_res0,
             &mut weights_res1,
+            &sk,
         );
         println!("Time: {:?}", now.elapsed());
 
         // TODO test FMA of indices and weights
-        let indices_ct = coefficient_u128_to_ciphertext(&params, &indices_res0, &indices_res1, 0);
-        let weights_ct = coefficient_u128_to_ciphertext(&params, &weights_res0, &weights_res1, 0);
+        let indices_ct =
+            coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, 0);
+        let weights_ct =
+            coefficient_u128_to_ciphertext(evaluator.params(), &weights_res0, &weights_res1, 0);
         // let c0 = ;
 
-        dbg!(sk.measure_noise(&indices_ct, &mut rng));
+        dbg!(evaluator.measure_noise(&sk, &indices_ct));
 
         assert!(ones.len() == 32);
 
         ones.iter().for_each(|ct| {
-            dbg!(sk.measure_noise(ct, &mut rng));
-            let rm = sk.decrypt(ct).decode(Encoding::simd(0));
+            dbg!(evaluator.measure_noise(&sk, ct));
+            let rm = evaluator.plaintext_decode(&evaluator.decrypt(&sk, ct), Encoding::default());
+            // dbg!(&rm);
             assert!(rm == m);
         });
     }

@@ -1,4 +1,6 @@
-use bfv::{BfvParameters, Ciphertext, Encoding, PolyContext, RelinearizationKey, SecretKey};
+use bfv::{
+    BfvParameters, Ciphertext, Encoding, Evaluator, PolyContext, RelinearizationKey, SecretKey,
+};
 use byteorder::{ByteOrder, LittleEndian};
 use itertools::Itertools;
 use ndarray::Array2;
@@ -13,39 +15,25 @@ pub fn read_range_coeffs() -> Vec<u64> {
     coeffs.to_vec()
 }
 
-pub fn precompute_range_constants<T: Ntt>(ctx: &PolyContext<T>) -> Array2<u64> {
+pub fn precompute_range_constants(ctx: &PolyContext<'_>) -> Array2<u64> {
     let coeffs = read_range_coeffs();
     let v = coeffs
         .iter()
-        .flat_map(|c| ctx.moduli.iter().map(|qi| *c % *qi))
+        .flat_map(|c| ctx.iter_moduli_ops().map(|modqi| *c % modqi.modulus()))
         .collect_vec();
 
-    Array2::from_shape_vec((65536usize, ctx.moduli.len()), v).unwrap()
+    Array2::from_shape_vec((65536usize, ctx.moduli_count()), v).unwrap()
 }
 
-pub unsafe fn decrypt_and_print<T: Ntt>(ct: &Ciphertext<T>, sk: &SecretKey<T>, tag: &str) {
+pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &SecretKey, tag: &str) {
     let mut rng = thread_rng();
-    let v = sk.decrypt(ct).decode(Encoding::simd(0));
+    let v = evaluator.plaintext_decode(&evaluator.decrypt(sk, ct), Encoding::default());
     println!(
         "{tag}= Noise: {}; m: {:?}",
-        sk.measure_noise(ct, &mut rng),
-        "Too big!"
+        evaluator.measure_noise(sk, ct),
+        &v[..256]
     );
 }
-
-fn gen_rlks<T: traits::Ntt>(
-    levels: &[usize],
-    sk: &SecretKey<T>,
-    params: &Arc<BfvParameters<T>>,
-) -> Vec<RelinearizationKey<T>> {
-    let mut rng = thread_rng();
-    levels
-        .iter()
-        .map(|l| RelinearizationKey::new(params, sk, *l, &mut rng))
-        .collect_vec()
-}
-
-pub fn gen_rtgs() {}
 
 mod test {
     use super::*;
