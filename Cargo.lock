@@ -20,6 +20,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "bfv"
 version = "0.1.0"
+source = "git+https://github.com/Janmajayamall/bfv?branch=arced#66f8a3ae7b03ae91df825559239ebe6ef2cb7774"
 dependencies = [
  "crypto-bigint",
  "fhe-math",
@@ -31,7 +32,6 @@ dependencies = [
  "num-traits",
  "rand",
  "rand_chacha",
- "rayon",
  "seq-macro",
  "traits",
 ]

@@ -154,6 +154,6 @@ fn time_dff_even_all_powers_of_x() {
 fn main() {
     // level_powers_of_x();
     // level_range_fn();
-    // phase1()
-    time_dff_even_all_powers_of_x();
+    phase1()
+    // time_dff_even_all_powers_of_x();
 }

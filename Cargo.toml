@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bfv = {path="./../bfv/bfv"}
+bfv = {git = "https://github.com/Janmajayamall/bfv", branch="arced"}
 traits = {git = "https://github.com/Janmajayamall/bfv", branch="ntt-trait"}
 rand = "0.8.5"
 itertools = "0.10.5"
