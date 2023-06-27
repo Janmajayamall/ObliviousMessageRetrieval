@@ -1,8 +1,6 @@
 use bfv::{
-    nb_theory::generate_primes_vec,
-    parameters::BfvParameters,
-    poly::{Poly, PolyContext, Representation},
-    Encoding, Plaintext, SecretKey,
+    generate_primes_vec, BfvParameters, Encoding, Evaluator, Plaintext, Poly, PolyContext,
+    PolyType, Representation, SecretKey,
 };
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
@@ -17,16 +15,19 @@ fn bench(c: &mut Criterion) {
     group.sample_size(10);
 
     let mut rng = thread_rng();
-    let params = Arc::new(BfvParameters::default(12, 1 << 15));
+    let params = BfvParameters::default(12, 1 << 15);
     let m = params
         .plaintext_modulus_op
-        .random_vec(params.polynomial_degree, &mut rng);
-    let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-    let sk = SecretKey::random(&params, &mut rng);
+        .random_vec(params.degree, &mut rng);
+    let sk = SecretKey::random(params.degree, &mut rng);
+
+    let evaluator = Evaluator::new(params);
+    let pt = evaluator.plaintext_encode(&m, Encoding::default());
+
     let cts = (0..256)
         .map(|_| {
-            let mut c = sk.encrypt(&pt, &mut rng);
-            c.change_representation(&Representation::Evaluation);
+            let mut c = evaluator.encrypt(&sk, &pt, &mut rng);
+            evaluator.ciphertext_change_representation(&mut c, Representation::Evaluation);
             c
         })
         .collect_vec();
@@ -35,23 +36,21 @@ fn bench(c: &mut Criterion) {
     let polys = vec![pt.poly_ntt_ref().clone(); 256];
     group.bench_function("optimised_fma", |b| {
         b.iter(|| {
-            let mut res00 =
-                Array2::<u128>::zeros((params.ciphertext_moduli.len(), params.polynomial_degree));
-            let mut res01 =
-                Array2::<u128>::zeros((params.ciphertext_moduli.len(), params.polynomial_degree));
+            let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);
+            let mut res00 = Array2::<u128>::zeros((ctx.moduli_count(), ctx.degree()));
+            let mut res01 = Array2::<u128>::zeros((ctx.moduli_count(), ctx.degree()));
             optimised_poly_fma(&cts, &polys, &mut res00, &mut res01);
-            let _ = coefficient_u128_to_ciphertext(&params, &res00, &res01, 0);
+            let _ = coefficient_u128_to_ciphertext(evaluator.params(), &res00, &res01, 0);
         });
     });
 
     // unoptimised fma
-    let pts = vec![pt; 256];
     group.bench_function("unoptimised_fma", |b| {
         b.iter(|| {
-            let mut res = &cts[0] * &pts[0];
-            izip!(cts.iter(), pts.iter()).skip(1).for_each(|(c, p)| {
-                res.fma_reverse_inplace(c, p);
-            });
+            let mut res = evaluator.mul_poly(&cts[0], &polys[0]);
+            izip!(cts.iter(), polys.iter())
+                .skip(1)
+                .for_each(|(c, p)| evaluator.fma_poly(&mut res, c, p));
         });
     });
 }
