@@ -199,33 +199,6 @@ pub fn optimised_pvw_fma(
     coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level)
 }
 
-/// ciphertext and a vector of u64
-pub fn optmised_range_fn_fma(
-    res0: &mut Array2<u128>,
-    res1: &mut Array2<u128>,
-    ct: &Ciphertext,
-    scalar_reduced: &[u64],
-) {
-    debug_assert!(ct.c_ref()[0].representation == Representation::Evaluation);
-
-    azip!(
-        res0.outer_iter_mut(),
-        ct.c_ref()[0].coefficients.outer_iter(),
-        scalar_reduced.into_producer()
-    )
-    .for_each(|mut r, a, s| {
-        scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
-    });
-    azip!(
-        res1.outer_iter_mut(),
-        ct.c_ref()[1].coefficients.outer_iter(),
-        scalar_reduced.into_producer()
-    )
-    .for_each(|mut r, a, s| {
-        scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
-    });
-}
-
 pub fn add_u128(r: &mut [u128], a: &[u64]) {
     r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
         *r0 += *a0 as u128;
@@ -417,77 +390,6 @@ mod tests {
             "Noise: Opt={:?}, UnOpt={:?}",
             evaluator.measure_noise(&sk, &ct),
             evaluator.measure_noise(&sk, &ct_clone),
-        );
-    }
-
-    #[test]
-    fn test_optimised_range_fn_fma() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(15, 1 << 15);
-        let m = params
-            .plaintext_modulus_op
-            .random_vec(params.degree, &mut rng);
-        let sk = SecretKey::random(params.degree, &mut rng);
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        // change ct representation to Evaluation for plaintext mul
-        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
-
-        let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);
-        let constants = precompute_range_constants(&ctx);
-
-        {
-            // warmup
-            let mut tmp = evaluator.mul_poly(&ct, pt.poly_ntt_ref());
-            for j in 0..300 {
-                evaluator.add_assign(&mut tmp, &evaluator.mul_poly(&ct, pt.poly_ntt_ref()));
-            }
-        }
-
-        // optimised version
-        let now = std::time::Instant::now();
-        let degree = evaluator.params().degree;
-        let mut res0_u128 = Array2::<u128>::zeros((ctx.moduli_count(), degree));
-        let mut res1_u128 = Array2::<u128>::zeros((ctx.moduli_count(), degree));
-        for j in 0..256 {
-            optmised_range_fn_fma(
-                &mut res0_u128,
-                &mut res1_u128,
-                &ct,
-                constants.slice(s![j, ..]).as_slice().unwrap(),
-            );
-        }
-        let res_opt =
-            coefficient_u128_to_ciphertext(&evaluator.params(), &res0_u128, &res1_u128, ct.level);
-        let time_opt = now.elapsed();
-
-        // unoptimised version
-        let range_coeffs = read_range_coeffs();
-        // prepare range coefficients plaintext
-        let pts = (0..256)
-            .map(|i| {
-                let c = range_coeffs[i];
-                let m = vec![c; degree];
-                evaluator.plaintext_encode(&m, Encoding::simd(ct.level))
-            })
-            .collect_vec();
-        let now = std::time::Instant::now();
-        let mut res_unopt = evaluator.mul_poly(&ct, pts[0].poly_ntt_ref());
-        for j in 1..256 {
-            evaluator.add_assign(
-                &mut res_unopt,
-                &evaluator.mul_poly(&ct, pts[j].poly_ntt_ref()),
-            );
-        }
-        let time_unopt = now.elapsed();
-
-        println!("Time: Opt={:?}, UnOpt={:?}", time_opt, time_unopt);
-        println!(
-            "Noise: Opt={:?}, UnOpt={:?}",
-            evaluator.measure_noise(&sk, &res_opt),
-            evaluator.measure_noise(&sk, &res_unopt),
         );
     }
 }

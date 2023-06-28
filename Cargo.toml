@@ -6,7 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bfv = {path="./../bfv/bfv"}
+bfv = {path="./../bfv/bfv", features=["hexl"]}
 rand = "0.8.5"
 itertools = "0.10.5"
 ndarray = {version = "0.15.6", features = ["rayon"]}
@@ -16,10 +16,16 @@ num-bigint-dig = {version = "0.8.2", features = ["prime"]}
 num-traits = "0.2.15"
 byteorder = "1.4.3"
 rayon = "1.7.0"
+hexl-rs = {path="./../hexl-rs"}
 
 [dev-dependencies]
 criterion = "0.4"
+mimalloc-rust = "0.2.1"
 
 [[bench]]
 name = "basic_ops"
+harness = false
+
+[[bench]]
+name = "range_fn"
 harness = false
