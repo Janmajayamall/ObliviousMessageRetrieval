@@ -8,7 +8,6 @@ use ndarray::{azip, s, Array1, Array2, IntoNdProducer};
 use num_bigint_dig::{BigUint, ModInverse, ToBigUint};
 use num_traits::ToPrimitive;
 use rand::thread_rng;
-use traits::Ntt;
 
 /// Barrett reduction of coefficients in u128 to u64
 pub fn barret_reduce_coefficients_u128(r_u128: &Array2<u128>, modq: &[Modulus]) -> Array2<u64> {

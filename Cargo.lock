@@ -272,7 +272,7 @@ checksum = "7fcaabb2fef8c910e7f4c7ce9f67a1283a1715879a7c230ca9d6d1ae31f16d91"
 [[package]]
 name = "fhe-math"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#a2d0532a301702bd1b8329375bac40ee3accd54f"
+source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#98fbf4bf5bd374d9e137b355fd975473b449a729"
 dependencies = [
  "crypto-bigint",
  "fhe-traits",
@@ -294,7 +294,7 @@ dependencies = [
 [[package]]
 name = "fhe-traits"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#a2d0532a301702bd1b8329375bac40ee3accd54f"
+source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#98fbf4bf5bd374d9e137b355fd975473b449a729"
 dependencies = [
  "rand",
 ]
@@ -302,7 +302,7 @@ dependencies = [
 [[package]]
 name = "fhe-util"
 version = "0.1.0-beta.4"
-source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#a2d0532a301702bd1b8329375bac40ee3accd54f"
+source = "git+https://github.com/Janmajayamall/fhe.rs?branch=compare#98fbf4bf5bd374d9e137b355fd975473b449a729"
 dependencies = [
  "itertools",
  "num-bigint-dig",
@@ -406,9 +406,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.146"
+version = "0.2.147"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f92be4933c13fd498862a9e02a3055f8a8d9c039ce33db97306fd5a6caa7f29b"
+checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
 
 [[package]]
 name = "libm"
@@ -588,7 +588,6 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "statrs",
- "traits",
 ]
 
 [[package]]
@@ -651,9 +650,9 @@ checksum = "5b40af805b3121feab8a3c29f04d8ad262fa8e0561883e7653e024ae4479e6de"
 
 [[package]]
 name = "proc-macro2"
-version = "1.0.60"
+version = "1.0.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dec2b086b7a862cf4de201096214fa870344cf922b2b30c167badb3af3195406"
+checksum = "7b368fba921b0dce7e60f5e04ec15e565b3303972b42bcfde1d0713b881959eb"
 dependencies = [
  "unicode-ident",
 ]
@@ -823,14 +822,14 @@ checksum = "d9735b638ccc51c28bf6914d90a2e9725b377144fc612c49a611fddd1b631d68"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
 name = "serde_json"
-version = "1.0.97"
+version = "1.0.99"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdf3bf93142acad5821c99197022e170842cdbc1c30482b98750c688c640842a"
+checksum = "46266871c240a00b8f503b877622fe33430b3c7d963bdc0f2adc511e54a1eae3"
 dependencies = [
  "itoa",
  "ryu",
@@ -905,9 +904,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.18"
+version = "2.0.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32d41677bcbe24c20c52e7c70b0d8db04134c5d1066bf98662e2871ad200ea3e"
+checksum = "2efbeae7acf4eabd6bcdcbd11c92f45231ddda7539edc7806bd1a04a03b24616"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -937,7 +936,7 @@ checksum = "f9456a42c5b0d803c8cd86e73dd7cc9edd429499f37a3550d286d5e86720569f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
 ]
 
 [[package]]
@@ -953,7 +952,7 @@ dependencies = [
 [[package]]
 name = "traits"
 version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv?branch=ntt-trait#2e1abb6a65ff83d2b59358580da42d8364f869ae"
+source = "git+https://github.com/Janmajayamall/bfv?branch=dev#1ef14b68d9c452fd3b93cf90917bdb337f062d40"
 
 [[package]]
 name = "typenum"
@@ -1010,7 +1009,7 @@ dependencies = [
  "once_cell",
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
  "wasm-bindgen-shared",
 ]
 
@@ -1032,7 +1031,7 @@ checksum = "54681b18a46765f095758388f2d0cf16eb8d4169b639ab575a8f5693af210c7b"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.18",
+ "syn 2.0.22",
  "wasm-bindgen-backend",
  "wasm-bindgen-shared",
 ]

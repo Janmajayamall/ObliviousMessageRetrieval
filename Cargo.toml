@@ -7,7 +7,6 @@ edition = "2021"
 
 [dependencies]
 bfv = {path="./../bfv/bfv"}
-traits = {git = "https://github.com/Janmajayamall/bfv", branch="ntt-trait"}
 rand = "0.8.5"
 itertools = "0.10.5"
 ndarray = {version = "0.15.6", features = ["rayon"]}

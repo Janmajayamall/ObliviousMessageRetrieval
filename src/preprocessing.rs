@@ -1,7 +1,6 @@
 use crate::pvw::{PvwCiphertext, PvwParameters};
 use bfv::{BfvParameters, Encoding, Evaluator, Plaintext, Poly, Representation};
 use std::sync::Arc;
-use traits::Ntt;
 
 pub fn pre_process_batch(
     pvw_params: &Arc<PvwParameters>,
@@ -115,7 +114,7 @@ pub fn precompute_indices_pts(evaluator: &Evaluator, level: usize, max: usize) -
         .collect()
 }
 
-pub fn precompute_weight_pts<T: Ntt>(evaluator: &Evaluator, level: usize, max: usize) -> Vec<Poly> {
+pub fn precompute_weight_pts(evaluator: &Evaluator, level: usize, max: usize) -> Vec<Poly> {
     let params = evaluator.params();
     let degree = params.degree;
     let bit_space = 64 - params.plaintext_modulus.leading_zeros() - 1;

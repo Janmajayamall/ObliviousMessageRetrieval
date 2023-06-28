@@ -14,8 +14,7 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
-use std::{collections::HashMap, sync::Arc};
-use traits::Ntt;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
 // rotate by 1 and perform plaintext mutiplication for each ell
 pub fn pvw_decrypt(
@@ -93,7 +92,7 @@ pub fn powers_of_x_ct(
                     values[res_deg - 1] = evaluator.relinearize(&tmp, ek);
                     // println!("Res deg time: {:?}", now.elapsed());
                     calculated[res_deg - 1] = 1;
-                    // mul_count += 1;
+                    mul_count += 1;
                 }
             }
             exp >>= 1;
@@ -116,12 +115,12 @@ pub fn powers_of_x_ct(
                     // println!("Base deg time: {:?}", now.elapsed());
                     calculated[base_deg - 1] = 1;
 
-                    // mul_count += 1;
+                    mul_count += 1;
                 }
             }
         }
     }
-    // dbg!(mul_count);
+    dbg!(mul_count);
 
     values
 }
@@ -200,25 +199,25 @@ pub fn range_fn(
     sub_from_one_precompute: &[u64],
     sk: &SecretKey,
 ) -> Ciphertext {
-    // let mut now = Instant::now();
+    let mut now = Instant::now();
     let mut single_powers = even_powers_of_x_ct(ct, evaluator, ek, sk);
-    // println!("single_powers: {:?}", now.elapsed());
+    println!("single_powers: {:?}", now.elapsed());
     // decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
 
-    // now = Instant::now();
+    now = Instant::now();
     let double_powers = powers_of_x_ct(&single_powers[127], evaluator, ek, sk);
-    // println!("double_powers: {:?}", now.elapsed());
+    println!("double_powers: {:?}", now.elapsed());
     // decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
 
     // change to evaluation for plaintext multiplication
-    // now = Instant::now();
+    now = Instant::now();
     single_powers.iter_mut().for_each(|ct| {
         evaluator.ciphertext_change_representation(ct, Representation::Evaluation);
     });
-    // println!(
-    //     "single_powers coefficient to evaluation: {:?}",
-    //     now.elapsed()
-    // );
+    println!(
+        "single_powers coefficient to evaluation: {:?}",
+        now.elapsed()
+    );
 
     let level = 0;
     let q_ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
@@ -227,12 +226,12 @@ pub fn range_fn(
     let mut left_over_ct = Ciphertext::new(vec![], PolyType::Q, 0);
     let mut sum_ct = Ciphertext::new(vec![], PolyType::Q, 0);
 
-    // now = Instant::now();
+    now = Instant::now();
     for i in 0..256 {
         let mut res0_u128 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
         let mut res1_u128 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
 
-        // let mut inner_now = Instant::now();
+        let mut inner_now = Instant::now();
         // Starting from 0th index every alternate constant is 0. Since plintext multiplication by 0 is 0, we don't need to
         // process plaintext multiplications for indices at which constant is 0. Thus, we start from 1st index and process
         // every alternate index.
@@ -250,7 +249,7 @@ pub fn range_fn(
 
         let res_ct =
             coefficient_u128_to_ciphertext(evaluator.params(), &res0_u128, &res1_u128, level);
-        // println!("Inner scalar product {i}: {:?}", inner_now.elapsed());
+        println!("Inner scalar product {i}: {:?}", inner_now.elapsed());
         // decrypt_and_print(&res_ct, sk, &format!("Inner scalar product {i}"));
 
         // cache i == 0
@@ -274,7 +273,7 @@ pub fn range_fn(
 
     let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
     evaluator.add_assign(&mut sum_ct, &left_over_ct);
-    // println!("Outer summation: {:?}", now.elapsed());
+    println!("Outer summation: {:?}", now.elapsed());
     // decrypt_and_print(&sum_ct, sk, "Outer smmation");
 
     // implement optimised 1 - sum_ct
@@ -426,7 +425,7 @@ mod tests {
 
     #[test]
     fn range_fn_works() {
-        let params = BfvParameters::default(10, 1 << 3);
+        let params = BfvParameters::default(15, 1 << 15);
         let level = 0;
         let ctx = params.poly_ctx(&PolyType::Q, level);
 

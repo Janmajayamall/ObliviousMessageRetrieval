@@ -5,8 +5,6 @@ use byteorder::{ByteOrder, LittleEndian};
 use itertools::Itertools;
 use ndarray::Array2;
 use rand::thread_rng;
-use std::sync::Arc;
-use traits::Ntt;
 
 pub fn read_range_coeffs() -> Vec<u64> {
     let bytes = include_bytes!("../target/params_850.bin");
