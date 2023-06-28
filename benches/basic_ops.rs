@@ -5,9 +5,7 @@ use bfv::{
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
 use ndarray::Array2;
-use omr::optimised::{
-    coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma, scalar_mul_u128,
-};
+use omr::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma};
 use rand::{thread_rng, Rng};
 use std::{result, sync::Arc, time::Duration};
 
@@ -69,15 +67,6 @@ fn bench(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     fma_reverse_u128_vec(&mut sum, &a0, &a1);
-                });
-            },
-        );
-
-        group.bench_function(
-            BenchmarkId::new("scalar_mul_u128", format!("n={degree}")),
-            |b| {
-                b.iter(|| {
-                    scalar_mul_u128(&mut sum, &a0, 1125899904679937);
                 });
             },
         );

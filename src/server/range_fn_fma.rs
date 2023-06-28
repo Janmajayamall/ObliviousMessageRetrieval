@@ -2,9 +2,7 @@ use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
 use crate::utils::decrypt_and_print;
 use crate::{
-    optimised::{
-        barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, scalar_mul_u128, sub_from_one,
-    },
+    optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,
 };
 use bfv::{
@@ -14,6 +12,25 @@ use bfv::{
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
 use std::{collections::HashMap, sync::Arc, time::Instant};
+
+/// r0 += a0 * s
+pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
+    let s_u128 = s as u128;
+    r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
+        *r0 += *a0 as u128 * s_u128;
+    })
+}
+
+pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u64]) {
+    izip!(
+        res.outer_iter_mut(),
+        a.coefficients.outer_iter(),
+        scalar_slice.iter(),
+    )
+    .for_each(|(mut r, a, s)| {
+        scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
+    });
+}
 
 /// ciphertext and a vector of u64
 pub fn optimised_range_fn_fma_u128(
@@ -34,27 +51,23 @@ pub fn optimised_range_fn_fma_u128(
     for j in (2..257).step_by(2) {
         let power_ct = &single_powers[j / 2 - 1];
         let scalar_reduced = constants.slice(s![constants_outer_offset + (j - 1), ..]);
-        izip!(
-            res0.outer_iter_mut(),
-            power_ct.c_ref()[0].coefficients.outer_iter(),
-            scalar_reduced.iter(),
-        )
-        .for_each(|(mut r, a, s)| {
-            scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
-        });
-        izip!(
-            res1.outer_iter_mut(),
-            power_ct.c_ref()[1].coefficients.outer_iter(),
-            scalar_reduced.iter()
-        )
-        .for_each(|(mut r, a, s)| {
-            scalar_mul_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap(), *s);
-        });
+
+        mul_poly_scalar_u128(
+            &mut res0,
+            &power_ct.c_ref()[0],
+            scalar_reduced.as_slice().unwrap(),
+        );
+        mul_poly_scalar_u128(
+            &mut res1,
+            &power_ct.c_ref()[1],
+            scalar_reduced.as_slice().unwrap(),
+        );
     }
 
     coefficient_u128_to_ciphertext(params, &res0, &res1, level)
 }
 
+#[cfg(target_arch = "x86")]
 pub fn mul_poly_scalar_slice_hexl(
     poly_ctx: &PolyContext<'_>,
     res: &mut Poly,
@@ -80,6 +93,7 @@ pub fn mul_poly_scalar_slice_hexl(
     });
 }
 
+#[cfg(target_arch = "x86")]
 pub fn fma_poly_scale_slice_hexl(
     poly_ctx: &PolyContext<'_>,
     res: &mut Poly,
@@ -105,6 +119,7 @@ pub fn fma_poly_scale_slice_hexl(
     });
 }
 
+#[cfg(target_arch = "x86")]
 pub fn optimised_range_fn_fma_hexl(
     poly_ctx: &PolyContext<'_>,
     single_powers: &[Ciphertext],
@@ -211,6 +226,7 @@ mod tests {
 
         // optimised hexl version
         let now = std::time::Instant::now();
+        #[cfg(target_arch = "x86")]
         let res_opt_hexl = optimised_range_fn_fma_hexl(&ctx, &single_powers, &constants, 0, level);
         let time_opt_hexl = now.elapsed();
 
@@ -250,10 +266,19 @@ mod tests {
             "Time: Opt={:?}, OptHexl={:?}, UnOpt={:?}",
             time_opt, time_opt_hexl, time_unopt
         );
+
+        #[cfg(target_arch = "x86")]
         println!(
             "Noise: Opt={:?}, OptHexl={:?}, UnOpt={:?}",
             evaluator.measure_noise(&sk, &res_opt_u128),
             evaluator.measure_noise(&sk, &res_opt_hexl),
+            evaluator.measure_noise(&sk, &res_unopt),
+        );
+
+        #[cfg(target_arch = "x86")]
+        println!(
+            "Noise: Opt={:?}, UnOpt={:?}",
+            evaluator.measure_noise(&sk, &res_opt_u128),
             evaluator.measure_noise(&sk, &res_unopt),
         );
     }

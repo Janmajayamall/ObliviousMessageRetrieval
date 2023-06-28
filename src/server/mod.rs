@@ -11,7 +11,6 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
-use range_fn_fma::{optimised_range_fn_fma_hexl, optimised_range_fn_fma_u128};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 pub mod range_fn_fma;
@@ -229,8 +228,24 @@ pub fn range_fn(
     // now = Instant::now();
     for i in 0..256 {
         // let mut inner_now = Instant::now();
-        let res_ct =
-            optimised_range_fn_fma_hexl(&q_ctx, &single_powers, &constants, 256 * i, level);
+        #[cfg(target_arch = "x86")]
+        let res_ct = range_fn_fma::optimised_range_fn_fma_hexl(
+            &q_ctx,
+            &single_powers,
+            &constants,
+            256 * i,
+            level,
+        );
+
+        #[cfg(not(target_arch = "x86"))]
+        let res_ct = range_fn_fma::optimised_range_fn_fma_u128(
+            &q_ctx,
+            evaluator.params(),
+            &single_powers,
+            &constants,
+            256 * i,
+            level,
+        );
         // println!("Inner scalar product {i}: {:?}", inner_now.elapsed());
         // decrypt_and_print(&res_ct, sk, &format!("Inner scalar product {i}"));
 

@@ -106,14 +106,6 @@ pub fn sub_from_one(params: &BfvParameters, ct: &mut Ciphertext, precomputes: &[
     });
 }
 
-/// r0 += a0 * s
-pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
-    let s_u128 = s as u128;
-    r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
-        *r0 += *a0 as u128 * s_u128;
-    })
-}
-
 pub fn fma_reverse_u128_vec(a: &mut [u128], b: &[u64], c: &[u64]) {
     izip!(a.iter_mut(), b.iter(), c.iter()).for_each(|(a0, b0, c0)| {
         *a0 += *b0 as u128 * *c0 as u128;

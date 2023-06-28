@@ -4,13 +4,17 @@ use bfv::{
 };
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
+use ndarray::Array2;
 use omr::{
-    server::range_fn_fma::{
-        fma_poly_scale_slice_hexl, mul_poly_scalar_slice_hexl, optimised_range_fn_fma_hexl,
-    },
+    server::range_fn_fma::{mul_poly_scalar_u128, optimised_range_fn_fma_u128, scalar_mul_u128},
     utils::precompute_range_constants,
 };
 use rand::{thread_rng, Rng};
+
+#[cfg(target_arch = "x86")]
+use omr::server::range_fn_fma::{
+    fma_poly_scale_slice_hexl, mul_poly_scalar_slice_hexl, optimised_range_fn_fma_hexl,
+};
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("range_fn");
@@ -35,31 +39,37 @@ fn bench(c: &mut Criterion) {
             let p1 = ctx.random(Representation::Evaluation, &mut rng);
             let scalar_slice = (0..ctx.moduli_count()).map(|v| v as u64).collect_vec();
 
-            let mut p0_clone = p0.clone();
-            group.bench_function(
-                BenchmarkId::new(
-                    "mul_poly_scalar_slice_hexl",
-                    format!("n={degree}/mod_size={mod_size}"),
-                ),
-                |b| {
-                    b.iter(|| {
-                        mul_poly_scalar_slice_hexl(&ctx, &mut p0_clone, &p1, &scalar_slice);
-                    });
-                },
-            );
+            #[cfg(target_arch = "x86")]
+            {
+                let mut p0_clone = p0.clone();
+                group.bench_function(
+                    BenchmarkId::new(
+                        "mul_poly_scalar_slice_hexl",
+                        format!("n={degree}/mod_size={mod_size}"),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            mul_poly_scalar_slice_hexl(&ctx, &mut p0_clone, &p1, &scalar_slice);
+                        });
+                    },
+                );
+            }
 
-            let mut p0_clone = p0.clone();
-            group.bench_function(
-                BenchmarkId::new(
-                    "fma_poly_scale_slice_hexl",
-                    format!("n={degree}/mod_size={mod_size}"),
-                ),
-                |b| {
-                    b.iter(|| {
-                        fma_poly_scale_slice_hexl(&ctx, &mut p0_clone, &p1, &scalar_slice);
-                    });
-                },
-            );
+            #[cfg(target_arch = "x86")]
+            {
+                let mut p0_clone = p0.clone();
+                group.bench_function(
+                    BenchmarkId::new(
+                        "fma_poly_scale_slice_hexl",
+                        format!("n={degree}/mod_size={mod_size}"),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            fma_poly_scale_slice_hexl(&ctx, &mut p0_clone, &p1, &scalar_slice);
+                        });
+                    },
+                );
+            }
 
             {
                 let m = params
@@ -73,6 +83,8 @@ fn bench(c: &mut Criterion) {
                 let level = 0;
                 let single_powers = vec![ct.clone(); 128];
                 let constants = precompute_range_constants(&ctx);
+
+                #[cfg(target_arch = "x86")]
                 group.bench_function(
                     BenchmarkId::new(
                         "optimised_range_fn_fma_hexl",
@@ -84,7 +96,54 @@ fn bench(c: &mut Criterion) {
                         });
                     },
                 );
+
+                group.bench_function(
+                    BenchmarkId::new(
+                        "optimised_range_fn_fma_u128",
+                        format!("n={degree}/mod_size={mod_size}"),
+                    ),
+                    |b| {
+                        b.iter(|| {
+                            optimised_range_fn_fma_u128(
+                                &ctx,
+                                params,
+                                &single_powers,
+                                &constants,
+                                0,
+                                level,
+                            );
+                        });
+                    },
+                );
             }
+
+            {
+                let a = p0.clone();
+                let mut res = Array2::<u128>::zeros((ctx.moduli_count(), ctx.degree()));
+                group.bench_function(
+                    BenchmarkId::new(
+                        "mul_poly_scalar_u128",
+                        format!("n={degree}/mod_size={mod_size}"),
+                    ),
+                    |b| {
+                        b.iter(|| mul_poly_scalar_u128(&mut res, &a, &scalar_slice));
+                    },
+                );
+            }
+        }
+
+        {
+            let modulus = Modulus::new(1125899904679937);
+            let mut sum = vec![0; degree];
+            let a0 = modulus.random_vec(degree, &mut rng);
+            group.bench_function(
+                BenchmarkId::new("scalar_mul_u128", format!("n={degree}")),
+                |b| {
+                    b.iter(|| {
+                        scalar_mul_u128(&mut sum, &a0, 1125899904679937);
+                    });
+                },
+            );
         }
     }
 }
