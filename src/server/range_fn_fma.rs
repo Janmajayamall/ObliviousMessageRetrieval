@@ -21,6 +21,8 @@ pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
     })
 }
 
+/// `mul_poly_scalar_u128` calls `scalar_mul_u128` moduli count times. Hence,
+/// cost of `mul_poly_scalar_u128` must be `moduli_count * Cost(scalar_mul_u128)`
 pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u64]) {
     izip!(
         res.outer_iter_mut(),
@@ -32,7 +34,11 @@ pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u6
     });
 }
 
-/// ciphertext and a vector of u64
+/// `optimised_range_fn_fma_u128` calls `mul_poly_scalar_u128` 128 * 2 (ie 256) times. Additionally,
+/// inside `coefficient_u128_to_ciphertext` it calls `barret_reduction_u128_vec` `moduli_count*2` times.
+///
+/// Hence the cost of `optimised_range_fn_fma_u128` must be
+/// moduli_count * Cost(scalar_mul_u128) * 256 + moduli_count * 2 * Cost(barret_reduction_u128_vec)
 pub fn optimised_range_fn_fma_u128(
     poly_ctx: &PolyContext<'_>,
     params: &BfvParameters,
@@ -44,8 +50,7 @@ pub fn optimised_range_fn_fma_u128(
     let mut res0 = Array2::<u128>::zeros((poly_ctx.moduli_count(), poly_ctx.degree()));
     let mut res1 = Array2::<u128>::zeros((poly_ctx.moduli_count(), poly_ctx.degree()));
 
-    // let mut inner_now = Instant::now();
-    // Starting from 0th index every alternate constant is 0. Since plintext multiplication by 0 is 0, we don't need to
+    // Starting from 0th index every alternate constant is 0. Since plaintext multiplication by 0 is 0, we don't need to
     // process plaintext multiplications for indices at which constant is 0. Thus, we start from 1st index and process
     // every alternate index.
     for j in (2..257).step_by(2) {
@@ -67,7 +72,10 @@ pub fn optimised_range_fn_fma_u128(
     coefficient_u128_to_ciphertext(params, &res0, &res1, level)
 }
 
-#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
+/// `mul_poly_scalar_slice_hexl` calls `hexl_rs::elwise_mult_scalar_mod_2` moduli_count times. Hence, its cost must
+/// be:
+/// `moduli_count` * Cost(hexl_rs::elwise_mult_scalar_mod_2)
 pub fn mul_poly_scalar_slice_hexl(
     poly_ctx: &PolyContext<'_>,
     res: &mut Poly,
@@ -93,7 +101,10 @@ pub fn mul_poly_scalar_slice_hexl(
     });
 }
 
-#[cfg(target_arch = "x86")]
+/// `fma_poly_scale_slice_hexl` calls `hexl_rs::elwise_fma_mod` moduli_count times. Hence, its cost must
+/// be:
+/// `moduli_count` * Cost(hexl_rs::elwise_fma_mod)
+#[cfg(target_arch = "x86_64")]
 pub fn fma_poly_scale_slice_hexl(
     poly_ctx: &PolyContext<'_>,
     res: &mut Poly,
@@ -119,7 +130,16 @@ pub fn fma_poly_scale_slice_hexl(
     });
 }
 
-#[cfg(target_arch = "x86")]
+/// `optimised_range_fn_fma_hexl` calls `mul_poly_scalar_slice_hexl` 2 times and `fma_poly_scale_slice_hexl` 127 times.
+/// Hence, its cost must be
+/// mul_poly_scalar_slice_hexl * 2 + fma_poly_scale_slice_hexl * 2 * 127.
+///
+/// If we assume that cost of `hexl_rs::elwise_mult_scalar_mod_2` and `hexl_rs::elwise_fma_mod` as more or less equal, then the cost
+/// of `optimised_range_fn_fma_hexl` can be estimated as
+/// let hexl_cost = max( `hexl_rs::elwise_mult_scalar_mod_2` , `hexl_rs::elwise_fma_mod`)
+/// Cost(optimised_range_fn_fma_hexl) = hexl_cost * moduli_count * 2 + hexl_cost * moduli_count * 2 * 127
+/// = (hexl_cost * moduli_count * 2) * 128 = hexl_cost * moduli_count * 256
+#[cfg(target_arch = "x86_64")]
 pub fn optimised_range_fn_fma_hexl(
     poly_ctx: &PolyContext<'_>,
     single_powers: &[Ciphertext],
@@ -127,12 +147,7 @@ pub fn optimised_range_fn_fma_hexl(
     constants_outer_offset: usize,
     level: usize,
 ) -> Ciphertext {
-    // Starting from 0th index every alternate constant is 0. Since plintext multiplication by 0 is 0, we don't need to
-    // process plaintext multiplications for indices at which constant is 0. Thus, we start from 1st index and process
-    // every alternate index.
-
     // process the first index using scalar mod instead of fma
-
     let mut sum_ct = {
         let scalar_slice = constants.slice(s![constants_outer_offset + 1, ..]);
 
@@ -226,7 +241,7 @@ mod tests {
 
         // optimised hexl version
         let now = std::time::Instant::now();
-        #[cfg(target_arch = "x86")]
+        #[cfg(target_arch = "x86_64")]
         let res_opt_hexl = optimised_range_fn_fma_hexl(&ctx, &single_powers, &constants, 0, level);
         let time_opt_hexl = now.elapsed();
 
@@ -267,7 +282,7 @@ mod tests {
             time_opt, time_opt_hexl, time_unopt
         );
 
-        #[cfg(target_arch = "x86")]
+        #[cfg(target_arch = "x86_64")]
         println!(
             "Noise: Opt={:?}, OptHexl={:?}, UnOpt={:?}",
             evaluator.measure_noise(&sk, &res_opt_u128),
@@ -275,7 +290,7 @@ mod tests {
             evaluator.measure_noise(&sk, &res_unopt),
         );
 
-        #[cfg(target_arch = "x86")]
+        #[cfg(target_arch = "x86_64")]
         println!(
             "Noise: Opt={:?}, UnOpt={:?}",
             evaluator.measure_noise(&sk, &res_opt_u128),

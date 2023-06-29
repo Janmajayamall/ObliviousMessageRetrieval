@@ -11,7 +11,7 @@ use omr::{
 };
 use rand::{thread_rng, Rng};
 
-#[cfg(target_arch = "x86")]
+#[cfg(target_arch = "x86_64")]
 use omr::server::range_fn_fma::{
     fma_poly_scale_slice_hexl, mul_poly_scalar_slice_hexl, optimised_range_fn_fma_hexl,
 };
@@ -39,7 +39,7 @@ fn bench(c: &mut Criterion) {
             let p1 = ctx.random(Representation::Evaluation, &mut rng);
             let scalar_slice = (0..ctx.moduli_count()).map(|v| v as u64).collect_vec();
 
-            #[cfg(target_arch = "x86")]
+            #[cfg(target_arch = "x86_64")]
             {
                 let mut p0_clone = p0.clone();
                 group.bench_function(
@@ -55,7 +55,7 @@ fn bench(c: &mut Criterion) {
                 );
             }
 
-            #[cfg(target_arch = "x86")]
+            #[cfg(target_arch = "x86_64")]
             {
                 let mut p0_clone = p0.clone();
                 group.bench_function(
@@ -84,7 +84,7 @@ fn bench(c: &mut Criterion) {
                 let single_powers = vec![ct.clone(); 128];
                 let constants = precompute_range_constants(&ctx);
 
-                #[cfg(target_arch = "x86")]
+                #[cfg(target_arch = "x86_64")]
                 group.bench_function(
                     BenchmarkId::new(
                         "optimised_range_fn_fma_hexl",

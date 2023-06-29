@@ -228,7 +228,7 @@ pub fn range_fn(
     // now = Instant::now();
     for i in 0..256 {
         // let mut inner_now = Instant::now();
-        #[cfg(target_arch = "x86")]
+        #[cfg(target_arch = "x86_64")]
         let res_ct = range_fn_fma::optimised_range_fn_fma_hexl(
             &q_ctx,
             &single_powers,
