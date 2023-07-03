@@ -94,7 +94,16 @@ pub fn precompute_expand_32_roll_pt(degree: usize, evaluator: &Evaluator) -> Vec
     pts
 }
 
-pub fn precompute_indices_pts(evaluator: &Evaluator, level: usize, max: usize) -> Vec<Poly> {
+pub fn read_indices_poly(evaluator: &Evaluator, level: usize, min: usize, max: usize) -> Vec<Poly> {
+    precompute_indices_pts(evaluator, level, min, max)
+}
+
+pub fn precompute_indices_pts(
+    evaluator: &Evaluator,
+    level: usize,
+    min: usize,
+    max: usize,
+) -> Vec<Poly> {
     let params = evaluator.params();
     let degree = params.degree;
     let bit_space = 64 - params.plaintext_modulus.leading_zeros() - 1;

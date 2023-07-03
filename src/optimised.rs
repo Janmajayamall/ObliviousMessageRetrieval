@@ -71,8 +71,8 @@ pub fn sub_from_one_precompute(params: &BfvParameters, level: usize) -> Vec<u64>
 pub fn sub_from_one(params: &BfvParameters, ct: &mut Ciphertext, precomputes: &[u64]) {
     debug_assert!(ct.c_ref()[0].representation == Representation::Coefficient);
 
-    let ctx = params.poly_ctx(&ct.poly_type, ct.level);
-    debug_assert!(precomputes.len() == ctx.moduli_count());
+    let ctx = params.poly_ctx(&ct.poly_type(), ct.level());
+    assert!(precomputes.len() == ctx.moduli_count());
 
     izip!(
         ct.c_ref_mut()[0].coefficients.outer_iter_mut(),
@@ -166,7 +166,7 @@ pub fn optimised_pvw_fma_with_rot(
         //     dbg!(sk.measure_noise(&s, &mut rng));
         // }
     }
-    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level)
+    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level())
 }
 
 /// Modify this to accept `s` and `hints_pts` as array of file locations instead of ciphertexts.
@@ -188,7 +188,7 @@ pub fn optimised_pvw_fma(
         fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
     }
 
-    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level)
+    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level())
 }
 
 pub fn add_u128(r: &mut [u128], a: &[u64]) {

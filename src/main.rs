@@ -3,14 +3,18 @@ use bfv::{
     PolyType, RelinearizationKey, Representation, SecretKey,
 };
 use itertools::{izip, Itertools};
+use ndarray::Array2;
 use rand::thread_rng;
 use std::sync::Arc;
 
 use omr::{
-    client::encrypt_pvw_sk,
-    optimised::sub_from_one_precompute,
+    client::{encrypt_pvw_sk, gen_pv_exapnd_rtgs},
+    optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
     plaintext::{powers_of_x_int, powers_of_x_modulus},
-    preprocessing::pre_process_batch,
+    preprocessing::{
+        pre_process_batch, precompute_expand_32_roll_pt, precompute_indices_pts,
+        procompute_expand_roll_pt,
+    },
     pvw::*,
     server::{even_powers_of_x_ct, powers_of_x_ct, pvw_decrypt, range_fn},
     utils::precompute_range_constants,
@@ -59,7 +63,7 @@ fn phase1() {
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = BfvParameters::default(15, 1 << 8);
     let sk = SecretKey::random(params.degree, &mut rng);
 
     // generate hints
@@ -132,6 +136,10 @@ fn phase1() {
     let v0 = evaluator.relinearize(&v0, &ek);
     let v1 = evaluator.mul(&ranged_cts[2], &ranged_cts[3]);
     let v1 = evaluator.relinearize(&v1, &ek);
+
+    println!("v0 noise: {}", evaluator.measure_noise(&sk, &v0));
+    println!("v1 noise: {}", evaluator.measure_noise(&sk, &v1));
+
     let v = evaluator.mul(&v0, &v1);
     // Relinearization of `v` can be modified such that overall ntts can be minized.
     // We expect `v` to be in evaluation form. Thus we convert c0 and c1, not c2, to evaluation form
@@ -139,10 +147,81 @@ fn phase1() {
     // c1' (key switch outputs in evaluation form) to c0 and c1 respectively. Instead if we
     // use normal `relinearize` the output will be in coefficient form and will have to pay
     // for additional 2 Ntts of size Q to convert ouput to evaluation.
-    let v = evaluator.relinearize(&v, &ek);
+    let mut v = evaluator.relinearize(&v, &ek);
     println!("Multiplication time: {:?}", now.elapsed());
 
     println!("phase 1 end ct noise: {}", evaluator.measure_noise(&sk, &v));
+
+    evaluator.ciphertext_change_representation(&mut v, Representation::Evaluation);
+    phase2(&evaluator, &sk, &v);
+}
+
+fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &Ciphertext) {
+    // let ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk);
+
+    // let degree = evaluator.params().degree;
+    // let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator);
+    // // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
+    // let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator);
+    // // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
+    // let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator);
+
+    // let level = 0;
+    // let batch_count = 1;
+    // let batch_size = 32;
+    // let indices_polys = precompute_indices_pts(&evaluator, level, batch_size * batch_count);
+    // let weight_polys = precompute_indices_pts(&evaluator, level, batch_size * batch_count);
+
+    // // restrict to `batch_count` batches
+    // let pts_32 = (0..batch_count)
+    //     .into_iter()
+    //     .map(|i| pts_32[i].clone())
+    //     .collect_vec();
+    // let indices_polys = &indices_polys[..32];
+    // let weight_polys = &weight_polys[..32];
+
+    // let moduli_count = evaluator
+    //     .params()
+    //     .poly_ctx(&PolyType::Q, level)
+    //     .moduli_count();
+    // let mut indices_res0 = Array2::<u128>::zeros((moduli_count, degree));
+    // let mut indices_res1 = Array2::<u128>::zeros((moduli_count, degree));
+    // let mut weights_res0 = Array2::<u128>::zeros((moduli_count, degree));
+    // let mut weights_res1 = Array2::<u128>::zeros((moduli_count, degree));
+
+    // dbg!(pts_32.len());
+
+    // let now = std::time::Instant::now();
+    // let ones = expand_ciphertext_batches_and_fma_fake(
+    //     &ek,
+    //     &evaluator,
+    //     &pts_4_roll,
+    //     &pts_1_roll,
+    //     &pv,
+    //     &pts_32[0],
+    //     &indices_polys[0],
+    //     &weight_polys[0],
+    //     &mut indices_res0,
+    //     &mut indices_res1,
+    //     &mut weights_res0,
+    //     &mut weights_res1,
+    //     &sk,
+    //     1024,
+    // );
+
+    // let mut indices_ct =
+    //     coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, level);
+    // let weights_ct =
+    //     coefficient_u128_to_ciphertext(evaluator.params(), &weights_res0, &weights_res1, level);
+
+    // println!("Phse 2 time: {:?}", now.elapsed());
+
+    // println!("Noise in One: {}", evaluator.measure_noise(sk, &ones[0]));
+
+    // println!(
+    //     "Noise in indices_ct: {}",
+    //     evaluator.measure_noise(sk, &indices_ct)
+    // );
 }
 
 /// Time of `even_powers_of_x_ct` should be half of `powers_of_x_ct`

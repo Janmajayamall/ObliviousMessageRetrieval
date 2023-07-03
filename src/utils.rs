@@ -29,7 +29,7 @@ pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &Sec
     println!(
         "{tag}= Noise: {}; m: {:?}",
         evaluator.measure_noise(sk, ct),
-        &v[..256]
+        &v[..0]
     );
 }
 

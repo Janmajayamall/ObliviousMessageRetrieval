@@ -13,6 +13,7 @@ use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
+pub mod phase2;
 pub mod range_fn_fma;
 
 // rotate by 1 and perform plaintext mutiplication for each ell
@@ -70,13 +71,13 @@ pub fn powers_of_x_ct(
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
     let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
-    let mut values = vec![dummy; 256];
-    let mut calculated = vec![0u64; 256];
+    let mut values = vec![dummy; 255];
+    let mut calculated = vec![0u64; 255];
     values[0] = x.clone();
     calculated[0] = 1;
-    let mut mul_count = 0;
+    // let mut mul_count = 0;
 
-    for i in (2..257).rev() {
+    for i in (2..256).rev() {
         let mut exp = i;
         let mut base_deg = 1;
         let mut res_deg = 0;
@@ -91,7 +92,7 @@ pub fn powers_of_x_ct(
                     values[res_deg - 1] = evaluator.relinearize(&tmp, ek);
                     // println!("Res deg time: {:?}", now.elapsed());
                     calculated[res_deg - 1] = 1;
-                    mul_count += 1;
+                    // mul_count += 1;
                 }
             }
             exp >>= 1;
@@ -114,12 +115,12 @@ pub fn powers_of_x_ct(
                     // println!("Base deg time: {:?}", now.elapsed());
                     calculated[base_deg - 1] = 1;
 
-                    mul_count += 1;
+                    // mul_count += 1;
                 }
             }
         }
     }
-    dbg!(mul_count);
+    // dbg!(mul_count);
 
     values
 }
@@ -201,12 +202,12 @@ pub fn range_fn(
     // let mut now = Instant::now();
     let mut single_powers = even_powers_of_x_ct(ct, evaluator, ek, sk);
     // println!("single_powers: {:?}", now.elapsed());
-    // decrypt_and_print(&single_powers[255], sk, "single_powers[255]");
+    unsafe { decrypt_and_print(&evaluator, &single_powers[127], sk, "single_powers[127]") }
 
     // now = Instant::now();
     let double_powers = powers_of_x_ct(&single_powers[127], evaluator, ek, sk);
     // println!("double_powers: {:?}", now.elapsed());
-    // decrypt_and_print(&double_powers[255], sk, "double_powers[255]");
+    unsafe { decrypt_and_print(&evaluator, &double_powers[254], sk, "double_powers[254]") };
 
     // change to evaluation for plaintext multiplication
     // now = Instant::now();
@@ -273,138 +274,11 @@ pub fn range_fn(
     let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
     evaluator.add_assign(&mut sum_ct, &left_over_ct);
     // println!("Outer summation: {:?}", now.elapsed());
-    // decrypt_and_print(&sum_ct, sk, "Outer smmation");
+    unsafe { decrypt_and_print(&evaluator, &sum_ct, sk, "Outer summation") }
 
     // implement optimised 1 - sum_ct
     sub_from_one(evaluator.params(), &mut sum_ct, sub_from_one_precompute);
     sum_ct
-}
-
-pub fn expand_ciphertext_batches_and_fma(
-    ek: &EvaluationKey,
-    evaluator: &Evaluator,
-    pts_4_roll: &[Plaintext],
-    pts_1_roll: &[Plaintext],
-    pv_ct: &Ciphertext,
-    pts_32: &[Plaintext],
-    indices_polys: &[Poly],
-    weights_polys: &[Poly],
-    res00: &mut Array2<u128>,
-    res01: &mut Array2<u128>,
-    res10: &mut Array2<u128>,
-    res11: &mut Array2<u128>,
-    sk: &SecretKey,
-) -> Vec<Ciphertext> {
-    let degree = evaluator.params().degree as isize;
-    let mut ones = vec![];
-    pts_32.iter().enumerate().for_each(|(batch_index, pt_32)| {
-        let mut r32_ct = evaluator.mul_poly(pv_ct, pt_32.poly_ntt_ref());
-
-        // populate 32 across all lanes
-        let mut i = 32;
-        while i < (degree / 2) {
-            // rot_count += 1;
-            let tmp = evaluator.rotate(&r32_ct, i, ek);
-            evaluator.add_assign(&mut r32_ct, &tmp);
-            i *= 2;
-        }
-        let tmp = evaluator.rotate(&r32_ct, 2 * degree - 1, ek);
-        evaluator.add_assign(&mut r32_ct, &tmp);
-
-        // extract first 4
-        let mut fours = vec![];
-        for i in 0..8 {
-            fours.push(evaluator.mul_poly(&r32_ct, pts_4_roll[i].poly_ntt_ref()));
-        }
-
-        // expand fours
-        let mut i = 4;
-        while i < 32 {
-            for j in 0..8 {
-                // rot_count += 1;
-                let tmp = evaluator.rotate(&mut fours[j], i, ek);
-                evaluator.add_assign(&mut fours[j], &tmp);
-            }
-            i *= 2;
-        }
-
-        // extract ones
-        for i in 0..8 {
-            let four = &fours[i];
-            for j in 0..4 {
-                ones.push(evaluator.mul_poly(four, pts_1_roll[j].poly_ntt_ref()));
-            }
-        }
-
-        // expand ones
-        let mut i = 1;
-        while i < 4 {
-            for j in (batch_index * 32)..(batch_index + 1) * 32 {
-                // rot_count += 1;
-                let tmp = evaluator.rotate(&ones[j], i, ek);
-                evaluator.add_assign(&mut ones[j], &tmp);
-            }
-            i *= 2;
-        }
-    });
-
-    izip!(ones.iter(), indices_polys.iter(), weights_polys.iter()).for_each(|(o, i, w)| {
-        // indices
-        fma_reverse_u128_poly(res00, &o.c_ref()[0], i);
-        fma_reverse_u128_poly(res01, &o.c_ref()[1], i);
-
-        // weights
-        fma_reverse_u128_poly(res10, &o.c_ref()[0], w);
-        fma_reverse_u128_poly(res11, &o.c_ref()[1], w);
-    });
-
-    ones
-}
-
-pub fn expand_pertinency_vector(
-    evaluator: &Evaluator,
-    degree: usize,
-    pv_ct: &Ciphertext,
-    ek: &EvaluationKey,
-    sk: &SecretKey,
-) -> Vec<Ciphertext> {
-    // extract first 32
-    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator);
-    let (pts_32, _) = pts_32.split_at(8);
-    // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator);
-    // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator);
-
-    // let mut rot_count = 0;
-    let mut res = vec![];
-
-    dbg!(rayon::current_num_threads());
-
-    let now = std::time::Instant::now();
-    let num_threads = rayon::current_num_threads();
-    let batch_size = pts_32.len() / num_threads;
-    let pts_32_chunks = pts_32.chunks_exact(batch_size);
-    rayon::scope(|s| {
-        pts_32_chunks.into_iter().for_each(|pts_32_chunk| {
-            s.spawn(|_| {
-                // let index = &i.clone();
-                // let _ = expand_ciphertext_batches_and_fma(
-                //     degree,
-                //     rtks,
-                //     &pts_4_roll,
-                //     &pts_1_roll,
-                //     pv_ct,
-                //     pts_32_chunk,
-                // );
-            });
-        });
-    });
-
-    println!("Time: {:?}", now.elapsed());
-    // println!("Rot count: {rot_count}");
-    res
-    // expand 32 into
 }
 
 #[cfg(test)]
@@ -424,7 +298,7 @@ mod tests {
 
     #[test]
     fn range_fn_works() {
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = BfvParameters::default(15, 1 << 8);
         let level = 0;
         let ctx = params.poly_ctx(&PolyType::Q, level);
 
@@ -529,162 +403,5 @@ mod tests {
                 assert!(r0 == v);
             });
         });
-    }
-
-    #[test]
-    fn test_expand_pertinency_vector() {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
-            .build_global()
-            .unwrap();
-
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(3, 1 << 15);
-        let sk = SecretKey::random(params.degree, &mut rng);
-
-        // create galois keys
-        let mut ek = gen_pv_exapnd_rtgs(&params, &sk);
-
-        let m = (0..params.degree)
-            .into_iter()
-            .map(|index| index as u64)
-            .collect_vec();
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
-
-        let expanded_cts =
-            expand_pertinency_vector(&evaluator, evaluator.params().degree, &ct, &ek, &sk);
-
-        // assert!(expanded_cts.len() == params.polynomial_degree);
-        // let first_noise = sk.measure_noise(&expanded_cts.first().unwrap(), &mut rng);
-        // println!("First Noise: {first_noise}");
-        // expanded_cts.iter().enumerate().for_each(|(index, ct)| {
-        //     // noise of all ciphertexts must in range +-4
-        //     let noise = sk.measure_noise(&ct, &mut rng);
-        //     if noise > first_noise + 4 || noise < first_noise - 4 {
-        //         println!("Outlier noise for {index}: {noise}");
-        //     }
-
-        //     let m = sk.decrypt(ct).decode(Encoding::simd(1));
-        //     // if m != vec![index as u64; params.polynomial_degree] {
-        //     //     println!("{:?}", m);
-        //     // }
-        //     assert!(m == vec![index as u64; params.polynomial_degree]);
-        // });
-    }
-
-    #[test]
-    fn test_expand_ciphertext_batches_and_fma() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(3, 1 << 15);
-        let sk = SecretKey::random(params.degree, &mut rng);
-        let degree = params.degree;
-        let m = vec![3; params.degree];
-
-        let ek = gen_pv_exapnd_rtgs(&params, &sk);
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
-
-        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator);
-        // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator);
-        // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator);
-
-        // polys for fma
-        let indices_polys = precompute_indices_pts(&evaluator, 0, 32);
-        let weight_polys = precompute_indices_pts(&evaluator, 0, 32);
-
-        // restrict to single batch
-        let pts_32 = vec![pts_32[0].clone()];
-        let indices_polys = &indices_polys[..32];
-        let weight_polys = &weight_polys[..32];
-        dbg!(std::mem::size_of_val(indices_polys));
-
-        let moduli_count = evaluator.params().poly_ctx(&PolyType::Q, 0).moduli_count();
-        let mut indices_res0 = Array2::<u128>::zeros((moduli_count, degree));
-        let mut indices_res1 = Array2::<u128>::zeros((moduli_count, degree));
-        let mut weights_res0 = Array2::<u128>::zeros((moduli_count, degree));
-        let mut weights_res1 = Array2::<u128>::zeros((moduli_count, degree));
-        dbg!(pts_32.len());
-
-        let now = std::time::Instant::now();
-        let ones = expand_ciphertext_batches_and_fma(
-            &ek,
-            &evaluator,
-            &pts_4_roll,
-            &pts_1_roll,
-            &ct,
-            &pts_32,
-            indices_polys,
-            weight_polys,
-            &mut indices_res0,
-            &mut indices_res1,
-            &mut weights_res0,
-            &mut weights_res1,
-            &sk,
-        );
-        println!("Time: {:?}", now.elapsed());
-
-        // TODO test FMA of indices and weights
-        let indices_ct =
-            coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, 0);
-        let weights_ct =
-            coefficient_u128_to_ciphertext(evaluator.params(), &weights_res0, &weights_res1, 0);
-        // let c0 = ;
-
-        dbg!(evaluator.measure_noise(&sk, &indices_ct));
-
-        assert!(ones.len() == 32);
-
-        ones.iter().for_each(|ct| {
-            dbg!(evaluator.measure_noise(&sk, ct));
-            let rm = evaluator.plaintext_decode(&evaluator.decrypt(&sk, ct), Encoding::default());
-            // dbg!(&rm);
-            assert!(rm == m);
-        });
-    }
-
-    #[test]
-    pub fn dummy_rot_count() {
-        let degree = 1 << 15;
-        let mut rot_count = 0;
-
-        for index in 0..(degree / 32) {
-            // populate 32 across all lanes
-            let mut i = 32;
-            while i < (degree / 2) {
-                // expansion
-                rot_count += 1;
-                i *= 2;
-            }
-            rot_count += 1;
-
-            // expand fours
-            let mut i = 4;
-            while i < 32 {
-                for j in 0..8 {
-                    rot_count += 1;
-                }
-                i *= 2;
-            }
-
-            for i in 0..8 {
-                let mut j = 1;
-                while j < 4 {
-                    for k in 0..4 {
-                        rot_count += 1;
-                    }
-                    j *= 2;
-                }
-            }
-        }
-
-        println!("Rot count: {rot_count}");
     }
 }

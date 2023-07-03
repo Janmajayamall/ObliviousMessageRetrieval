@@ -264,7 +264,7 @@ mod tests {
             .map(|i| {
                 let c = range_coeffs[i];
                 let m = vec![c; ctx.degree()];
-                evaluator.plaintext_encode(&m, Encoding::simd(ct.level))
+                evaluator.plaintext_encode(&m, Encoding::simd(ct.level()))
             })
             .collect_vec();
         let now = std::time::Instant::now();
