@@ -108,7 +108,7 @@ pub fn precompute_indices_pts(
     let degree = params.degree;
     let bit_space = 64 - params.plaintext_modulus.leading_zeros() - 1;
     assert!(bit_space == 16);
-    (0..std::cmp::min(degree, max))
+    (min..std::cmp::min(degree, max))
         .into_iter()
         .map(|i| {
             let mut m = vec![0u64; degree];
@@ -116,7 +116,7 @@ pub fn precompute_indices_pts(
             let row = i / 16;
             m[row] = 1 << col;
             evaluator
-                .plaintext_encode(&m, Encoding::default())
+                .plaintext_encode(&m, Encoding::simd(level))
                 .poly_ntt_ref()
                 .clone()
         })

@@ -140,6 +140,8 @@ pub fn process_pv_batch(
     batch_size: usize,
     level: usize,
 ) -> (Array2<u128>, Array2<u128>) {
+    println!("Processing batch {batch_index} with size {batch_size}");
+
     // expand batch cts
     let expanded_cts = pv_expand_batch(
         ek,
@@ -155,7 +157,12 @@ pub fn process_pv_batch(
 
     let start = batch_index * 32 * batch_size;
     let end = start + batch_size * 32;
+    println!("Reading indices poly for range {start} to {end}...");
     let indices_poly = read_indices_poly(evaluator, level, start, end);
+    println!(
+        "Read indices poly of len {} from {start} to {end}...",
+        indices_poly.len()
+    );
 
     fma_poly(ek, evaluator, &expanded_cts, &indices_poly, sk, level)
 }

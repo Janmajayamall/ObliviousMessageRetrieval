@@ -438,6 +438,8 @@ dependencies = [
  "bindgen",
  "cmake",
  "link-cplusplus",
+ "rand",
+ "traits",
 ]
 
 [[package]]
