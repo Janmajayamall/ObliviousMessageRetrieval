@@ -60,6 +60,7 @@ pub fn procompute_expand_roll_pt(
     extract_size: usize,
     degree: usize,
     evaluator: &Evaluator,
+    level: usize,
 ) -> Vec<Plaintext> {
     let parts = block_size / extract_size;
     let mut pts = vec![];
@@ -74,12 +75,16 @@ pub fn procompute_expand_roll_pt(
                 m.push(0);
             }
         }
-        pts.push(evaluator.plaintext_encode(&m, Encoding::default()));
+        pts.push(evaluator.plaintext_encode(&m, Encoding::simd(level)));
     }
     pts
 }
 
-pub fn precompute_expand_32_roll_pt(degree: usize, evaluator: &Evaluator) -> Vec<Plaintext> {
+pub fn precompute_expand_32_roll_pt(
+    degree: usize,
+    evaluator: &Evaluator,
+    level: usize,
+) -> Vec<Plaintext> {
     assert!(degree >= 32);
 
     let mut pts = vec![];
@@ -88,7 +93,7 @@ pub fn precompute_expand_32_roll_pt(degree: usize, evaluator: &Evaluator) -> Vec
         for j in (32 * i)..(32 * (i + 1)) {
             m[j] = 1u64;
         }
-        pts.push(evaluator.plaintext_encode(&m, Encoding::default()));
+        pts.push(evaluator.plaintext_encode(&m, Encoding::simd(level)));
     }
 
     pts

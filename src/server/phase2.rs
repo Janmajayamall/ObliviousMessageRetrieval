@@ -69,6 +69,7 @@ pub fn pv_expand_batch(
     let degree = evaluator.params().degree as isize;
     let mut ones = vec![];
     pts_32.iter().enumerate().for_each(|(batch_index, pt_32)| {
+        // dbg!(pv_ct.level(), pt_32.encoding.as_ref().unwrap().level);
         let mut r32_ct = evaluator.mul_poly(pv_ct, pt_32.poly_ntt_ref());
 
         // populate 32 across all lanes
@@ -117,13 +118,16 @@ pub fn pv_expand_batch(
             }
             i *= 2;
         }
+        dbg!(ones.first().unwrap().c_ref()[0].coefficients.shape()[0]);
     });
 
     println!(
-        "Pv expand took for batch_size {}: {:?}",
+        "Pv expand took for batch_size {}: {:?} level{}",
         pts_32.len(),
-        now.elapsed()
+        now.elapsed(),
+        ones.first().unwrap().c_ref()[0].coefficients.shape()[0]
     );
+
     ones
 }
 
@@ -179,11 +183,11 @@ pub fn phase2(
     let moduli_count = ctx.moduli_count();
 
     // extract first 32
-    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator);
+    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator, level);
     // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator);
+    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator, level);
     // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator);
+    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator, level);
 
     // let mut rot_count = 0;
     dbg!(rayon::current_num_threads());
@@ -226,7 +230,7 @@ pub fn phase2(
         add_u128_array(&mut first0, &tup.0);
         add_u128_array(&mut first1, &tup.1);
     });
-    let res = coefficient_u128_to_ciphertext(evaluator.params(), &first0, &first1, level + 1);
+    let res = coefficient_u128_to_ciphertext(evaluator.params(), &first0, &first1, level);
 
     println!("Phase 2 Time: {:?}", now.elapsed());
     // println!("Rot count: {rot_count}");
@@ -251,17 +255,9 @@ mod tests {
 
     #[test]
     fn test_phase2() {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
-            .build_global()
-            .unwrap();
-
         let mut rng = thread_rng();
-        let params = BfvParameters::default(3, 1 << 15);
+        let params = BfvParameters::default(15, 1 << 15);
         let sk = SecretKey::random(params.degree, &mut rng);
-
-        // create galois keys
-        let mut ek = gen_pv_exapnd_rtgs(&params, &sk);
 
         let m = (0..params.degree)
             .into_iter()
@@ -269,11 +265,19 @@ mod tests {
             .collect_vec();
         let evaluator = Evaluator::new(params);
 
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let mut level = 0;
+
+        let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+        level = 12;
+        evaluator.mod_down_level(&mut ct, level);
+
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
-        let res = phase2(&evaluator, &ct, &ek, &sk, 0);
+        // Generator rotation keys
+        let mut ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
+        let res = phase2(&evaluator, &ct, &ek, &sk, level);
 
         dbg!(evaluator.measure_noise(&sk, &res));
     }
@@ -281,27 +285,32 @@ mod tests {
     #[test]
     fn test_pv_expand_batch() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(3, 1 << 15);
+        let params = BfvParameters::default(15, 1 << 15);
         let sk = SecretKey::random(params.degree, &mut rng);
         let degree = params.degree;
         let m = vec![3; params.degree];
 
-        let ek = gen_pv_exapnd_rtgs(&params, &sk);
+        let level = 12;
 
         let evaluator = Evaluator::new(params);
         let pt = evaluator.plaintext_encode(&m, Encoding::default());
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+        evaluator.mod_down_level(&mut ct, level);
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
-        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator);
+        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator, level);
         // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator);
+        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator, level);
         // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator);
+        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator, level);
 
         // restrict to single batch
-        let pts_32 = vec![pts_32[0].clone()];
+        let pts_32 = (0..128)
+            .into_iter()
+            .map(|i| pts_32[i].clone())
+            .collect_vec();
 
+        let ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
         let ones = pv_expand_batch(&ek, &evaluator, &pts_4_roll, &pts_1_roll, &ct, &pts_32, &sk);
 
         ones.iter().for_each(|ct| {
@@ -320,18 +329,20 @@ mod tests {
         let degree = params.degree;
         let m = vec![3; params.degree];
 
-        let ek = gen_pv_exapnd_rtgs(&params, &sk);
+        let ek = gen_pv_exapnd_rtgs(&params, &sk, 0);
 
         let evaluator = Evaluator::new(params);
         let pt = evaluator.plaintext_encode(&m, Encoding::default());
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
-        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator);
+        let level = 0;
+
+        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator, level);
         // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator);
+        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator, level);
         // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator);
+        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator, level);
 
         let level = 0;
 

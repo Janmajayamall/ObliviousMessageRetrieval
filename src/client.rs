@@ -41,11 +41,10 @@ pub fn encrypt_pvw_sk<R: CryptoRng + RngCore>(
     cts
 }
 
-pub fn gen_pv_exapnd_rtgs(params: &BfvParameters, sk: &SecretKey) -> EvaluationKey {
+pub fn gen_pv_exapnd_rtgs(params: &BfvParameters, sk: &SecretKey, level: usize) -> EvaluationKey {
     // create galois keys
     let mut rng = thread_rng();
 
-    let level = 0;
     let mut rtg_indices = vec![];
     let mut rtg_levels = vec![];
     // keys for 32 expand
