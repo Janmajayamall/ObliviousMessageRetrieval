@@ -1,5 +1,4 @@
 use crate::utils::decrypt_and_print;
-use crate::LEVELLED;
 use crate::{
     optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,

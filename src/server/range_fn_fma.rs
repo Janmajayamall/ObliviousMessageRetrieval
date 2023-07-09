@@ -290,7 +290,7 @@ mod tests {
             evaluator.measure_noise(&sk, &res_unopt),
         );
 
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(not(target_arch = "x86_64"))]
         println!(
             "Noise: Opt={:?}, UnOpt={:?}",
             evaluator.measure_noise(&sk, &res_opt_u128),

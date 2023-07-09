@@ -26,6 +26,7 @@ use omr::{
         powers_x::{even_powers_of_x_ct, powers_of_x_ct},
         pvw_decrypt, range_fn,
     },
+    time_it,
     utils::precompute_range_constants,
 };
 
@@ -165,4 +166,111 @@ fn time_dff_even_all_powers_of_x() {
     println!("Time powers_of_x_ct = {:?}", now.elapsed());
 }
 
-fn main() {}
+fn dist_range_fn() {
+    let mut rng = thread_rng();
+    let params = BfvParameters::default(15, 1 << 15);
+    let sk = SecretKey::random(params.degree, &mut rng);
+    let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
+
+    let m = vec![3; params.degree];
+
+    let evaluator = Evaluator::new(params);
+    let pt = evaluator.plaintext_encode(&m, Encoding::default());
+    let ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+    let decrypted_cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
+    let constants = precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
+    let sub_from_one_precompute = sub_from_one_precompute(evaluator.params(), 0);
+
+    let threads = (rayon::current_num_threads() as f64 / 4.0).ceil() as usize;
+
+    time_it!("Range fn 4 times",
+    let final_v = rayon::join(
+        || {
+            let v = rayon::join(
+                || {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    pool.install(|| {
+                        println!("Running 0 with {threads} threads...");
+                        range_fn(
+                            &decrypted_cts[0],
+                            &evaluator,
+                            &ek,
+                            &constants,
+                            &sub_from_one_precompute,
+                            &sk,
+                        )
+                    })
+                },
+                || {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    pool.install(|| {
+                        println!("Running 1 with {threads} threads...");
+                        range_fn(
+                            &decrypted_cts[1],
+                            &evaluator,
+                            &ek,
+                            &constants,
+                            &sub_from_one_precompute,
+                            &sk,
+                        )
+                    })
+                },
+            );
+            v
+        },
+        || {
+            let v = rayon::join(
+                || {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    pool.install(|| {
+                        println!("Running 2 with {threads} threads...");
+                        range_fn(
+                            &decrypted_cts[2],
+                            &evaluator,
+                            &ek,
+                            &constants,
+                            &sub_from_one_precompute,
+                            &sk,
+                        )
+                    })
+                },
+                || {
+                    let pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(threads)
+                        .build()
+                        .unwrap();
+                    pool.install(|| {
+                        println!("Running 3 with {threads} threads...");
+                        range_fn(
+                            &decrypted_cts[3],
+                            &evaluator,
+                            &ek,
+                            &constants,
+                            &sub_from_one_precompute,
+                            &sk,
+                        )
+                    })
+                },
+            );
+            v
+        },
+    );
+    );
+}
+fn main() {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build_global()
+        .unwrap();
+    dist_range_fn();
+}

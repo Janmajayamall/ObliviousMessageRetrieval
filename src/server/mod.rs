@@ -1,12 +1,12 @@
 use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
 use crate::server::powers_x::evaluate_powers;
+use crate::time_it;
 use crate::utils::decrypt_and_print;
 use crate::{
     optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,
 };
-use crate::{time_it, LEVELLED};
 use bfv::{
     BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyContext,
     PolyType, RelinearizationKey, Representation, SecretKey,
@@ -204,7 +204,7 @@ pub fn range_fn(
                 // It's ok to index by `i - 1` here since `start` is never 0
                 let product = evaluator.mul_lazy(&res_ct, &m_powers[i - 1]);
 
-                // Don't add in first iteration, that is when i == start
+                // Don't add in first iteration when i == start since sum is empty
                 if i == start {
                     sum = product;
                 } else {
@@ -232,40 +232,42 @@ pub fn range_fn(
         }
     }
 
-    // calculate degree [1..256], ie the first k loop, seprarately since it does not
-    // needs to multiplied with any m_power and would remain in Q basis.
-    let ps_degree_0 = {
-        #[cfg(target_arch = "x86_64")]
-        let mut res_ct =
-            range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
+    time_it!("Loops",
+        // calculate degree [1..256], ie the first k loop, seprarately since it does not
+        // needs to be multiplied with any m_power and would remain in Q basis.
+        let m_0th_loop = {
+            #[cfg(target_arch = "x86_64")]
+            let mut res_ct =
+                range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
 
-        #[cfg(not(target_arch = "x86_64"))]
-        let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
-            &q_ctx,
-            evaluator.params(),
-            &k_powers,
-            &constants,
-            0,
-            level,
+            #[cfg(not(target_arch = "x86_64"))]
+            let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
+                &q_ctx,
+                evaluator.params(),
+                &k_powers,
+                &constants,
+                0,
+                level,
+            );
+
+            // change representation to Coefficient to stay consistent with output of rest of the k loops
+            evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
+            res_ct
+        };
+
+        // process_m_loop processes m_th loop for values in range [start, end)
+        let mut sum_ct = process_m_loop(
+            evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
         );
 
-        // change representation to Coefficient to stay consistent with output of rest of the k loops
-        evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
-        res_ct
-    };
+        // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
+        // chiphertext by P/t and switch to Q basis.
+        let sum_ct = evaluator.scale_and_round(&mut sum_ct);
+        let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
 
-    // process_k_loop processes k loop for values in range [start, end)
-    let mut sum_ct = process_m_loop(
-        evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
+        // add output of first loop, processed separately, to summation of output of rest of the loops
+        evaluator.add_assign(&mut sum_ct, &m_0th_loop);
     );
-
-    // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
-    // chiphertext by P/t and switch to Q basis.
-    let sum_ct = evaluator.scale_and_round(&mut sum_ct);
-    let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
-
-    // add output of first loop, processed separately, to summation of output of rest of the loops
-    evaluator.add_assign(&mut sum_ct, &ps_degree_0);
 
     sub_from_one(evaluator.params(), &mut sum_ct, sub_from_one_precompute);
     sum_ct
@@ -311,7 +313,7 @@ mod tests {
 
         // limit to single thread
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(8)
+            .num_threads(1)
             .build_global()
             .unwrap();
 
