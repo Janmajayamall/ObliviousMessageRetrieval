@@ -143,7 +143,7 @@ pub fn even_powers_of_x_ct(
     values
 }
 
-fn evaluate_powers(
+pub fn evaluate_powers(
     evaluator: &Evaluator,
     ek: &EvaluationKey,
     start: usize,
@@ -208,7 +208,7 @@ mod tests {
         let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
         let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
 
-        let cores = 10;
+        let cores = 4;
 
         // warm up
         {
@@ -222,13 +222,21 @@ mod tests {
         let now = std::time::Instant::now();
         let mut calculated = vec![dummy.clone(); 255];
         calculated[0] = ct;
-        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores);
+
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+
+        pool.install(|| {
+            evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores);
+        });
         println!("Time: {:?}", now.elapsed());
 
         let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op, 255);

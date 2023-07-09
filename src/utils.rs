@@ -15,6 +15,17 @@ pub fn read_range_coeffs() -> Vec<u64> {
     coeffs.to_vec()
 }
 
+#[macro_export]
+macro_rules! time_it{
+    ($tag:literal, $($tt:tt)+) => {
+        let timer = std::time::Instant::now();
+        $(
+            $tt
+        )+
+        println!("{}: {:?}", $tag, timer.elapsed());
+    }
+}
+
 pub fn store_range_coeffs() {
     let prime = 65537;
     let range = 850;
