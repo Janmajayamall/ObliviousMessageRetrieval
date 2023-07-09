@@ -162,7 +162,7 @@ pub fn range_fn(
     // k loop needs to run 255 times. `set_len` fairly distributes 255 iterations among available threads.
     let set_len = (255.0 / threads).ceil() as usize;
 
-    fn process_k_loop(
+    fn process_m_loop(
         evaluator: &Evaluator,
         q_ctx: &PolyContext<'_>,
         level: usize,
@@ -177,7 +177,6 @@ pub fn range_fn(
         if end - start <= set_len {
             println!("{start} {end}");
 
-            time_it!("K loop",
             let mut sum = Ciphertext::new(vec![], PolyType::Q, 0);
             for i in start..end {
                 #[cfg(target_arch = "x86_64")]
@@ -189,7 +188,7 @@ pub fn range_fn(
                     level,
                 );
 
-                #[cfg(not(target_arch = "x86"))]
+                #[cfg(not(target_arch = "x86_64"))]
                 let res_ct = range_fn_fma::optimised_range_fn_fma_u128(
                     &q_ctx,
                     evaluator.params(),
@@ -211,19 +210,19 @@ pub fn range_fn(
                 } else {
                     evaluator.add_assign(&mut sum, &product);
                 }
-            });
+            }
 
             sum
         } else {
             let mid = (start + end) / 2;
             let (mut ct0, ct1) = rayon::join(
                 || {
-                    process_k_loop(
+                    process_m_loop(
                         evaluator, q_ctx, level, constants, k_powers, m_powers, set_len, start, mid,
                     )
                 },
                 || {
-                    process_k_loop(
+                    process_m_loop(
                         evaluator, q_ctx, level, constants, k_powers, m_powers, set_len, mid, end,
                     )
                 },
@@ -233,43 +232,40 @@ pub fn range_fn(
         }
     }
 
-    time_it!("Loops",
-            // calculate degree [1..256], ie the first k loop, seprarately since it does not
-            // needs to multiplied with any m_power and would remain in Q basis.
-            let ps_degree_0 = {
-                #[cfg(target_arch = "x86_64")]
-                let mut res_ct =
-                    range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
+    // calculate degree [1..256], ie the first k loop, seprarately since it does not
+    // needs to multiplied with any m_power and would remain in Q basis.
+    let ps_degree_0 = {
+        #[cfg(target_arch = "x86_64")]
+        let mut res_ct =
+            range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
 
-                #[cfg(not(target_arch = "x86"))]
-                let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
-                    &q_ctx,
-                    evaluator.params(),
-                    &k_powers,
-                    &constants,
-                    0,
-                    level,
-                );
-
-                // change representation to Coefficient to stay consistent with output of rest of the k loops
-                evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
-                res_ct
-            };
-
-
-        // process_k_loop processes k loop for values in range [start, end)
-        let mut sum_ct = process_k_loop(
-            evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
+        #[cfg(not(target_arch = "x86_64"))]
+        let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
+            &q_ctx,
+            evaluator.params(),
+            &k_powers,
+            &constants,
+            0,
+            level,
         );
 
-        // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
-        // chiphertext by P/t and switch to Q basis.
-        let sum_ct = evaluator.scale_and_round(&mut sum_ct);
-        let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
+        // change representation to Coefficient to stay consistent with output of rest of the k loops
+        evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
+        res_ct
+    };
 
-        // add output of first loop, processed separately, to summation of output of rest of the loops
-        evaluator.add_assign(&mut sum_ct, &ps_degree_0);
+    // process_k_loop processes k loop for values in range [start, end)
+    let mut sum_ct = process_m_loop(
+        evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
     );
+
+    // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
+    // chiphertext by P/t and switch to Q basis.
+    let sum_ct = evaluator.scale_and_round(&mut sum_ct);
+    let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
+
+    // add output of first loop, processed separately, to summation of output of rest of the loops
+    evaluator.add_assign(&mut sum_ct, &ps_degree_0);
 
     sub_from_one(evaluator.params(), &mut sum_ct, sub_from_one_precompute);
     sum_ct
@@ -315,7 +311,7 @@ mod tests {
 
         // limit to single thread
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(2)
+            .num_threads(8)
             .build_global()
             .unwrap();
 
