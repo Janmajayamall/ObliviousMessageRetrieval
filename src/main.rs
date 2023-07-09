@@ -5,58 +5,30 @@ use bfv::{
 use itertools::{izip, Itertools};
 use ndarray::Array2;
 use rand::thread_rng;
-use std::sync::Arc;
+use rayon::{
+    prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
+use std::{
+    cell::Cell,
+    collections::{HashMap, HashSet},
+    hash::Hash,
+    sync::Arc,
+};
 
 use omr::{
     client::{encrypt_pvw_sk, gen_pv_exapnd_rtgs},
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
-    plaintext::{powers_of_x_int, powers_of_x_modulus},
-    preprocessing::{
-        pre_process_batch, precompute_expand_32_roll_pt, precompute_indices_pts,
-        procompute_expand_roll_pt,
-    },
+    preprocessing::{pre_process_batch, precompute_expand_32_roll_pt, precompute_indices_pts},
     pvw::*,
-    server::{even_powers_of_x_ct, phase2, powers_of_x_ct, pvw_decrypt, range_fn},
+    server::{
+        phase2,
+        powers_x::{even_powers_of_x_ct, powers_of_x_ct},
+        pvw_decrypt, range_fn,
+    },
     utils::precompute_range_constants,
 };
 
-// fn level_powers_of_x() {
-//     let mut rng = thread_rng();
-//     let params = Arc::new(BfvParameters::default(14, 1 << 15));
-//     let sk = SecretKey::random(&params, &mut rng);
-//     let m = vec![3; params.polynomial_degree];
-//     let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-//     let ct = sk.encrypt(&pt, &mut rng);
-//     let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
-
-//     powers_of_x_ct(&ct, &rlk, &sk);
-// }
-// fn level_range_fn() {
-//     let params = Arc::new(BfvParameters::default(10, 1 << 14));
-//     let ctx = params.ciphertext_ctx_at_level(0);
-
-//     let mut rng = thread_rng();
-//     let constants = precompute_range_constants(&ctx);
-//     let sub_one_precompute = sub_from_one_precompute(&params, 0);
-//     let sk = SecretKey::random(&params, &mut rng);
-//     let mut m = params
-//         .plaintext_modulus_op
-//         .random_vec(params.polynomial_degree, &mut rng);
-//     let pt = Plaintext::encode(&m, &params, Encoding::simd(0));
-//     let mut ct = sk.encrypt(&pt, &mut rng);
-
-//     // gen rlk
-//     let rlk = RelinearizationKey::new(&params, &sk, 0, &mut rng);
-
-//     let ct_res = range_fn(&ct, &rlk, &constants, &sub_one_precompute, &sk);
-//     dbg!(sk.measure_noise(&ct_res, &mut rng));
-// }
-
-/// 1. Pvw decrypt
-/// 2. range fn
-/// 3. muls into 1
-///
-/// TODO: Write a function that performs all pre-computation stuff and stores it
 fn phase1() {
     let mut rng = thread_rng();
     let pvw_params = Arc::new(PvwParameters::default());
@@ -193,9 +165,4 @@ fn time_dff_even_all_powers_of_x() {
     println!("Time powers_of_x_ct = {:?}", now.elapsed());
 }
 
-fn main() {
-    // level_powers_of_x();
-    // level_range_fn();
-    phase1()
-    // time_dff_even_all_powers_of_x();
-}
+fn main() {}

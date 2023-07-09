@@ -25,6 +25,12 @@ bfv = {path="./../bfv/bfv", features=["hexl"]}
 hexl-rs = {path="./../hexl-rs"}
 
 
+[features]
+lvl = []
+noise = []
+
+
+
 [dev-dependencies]
 criterion = "0.4"
 mimalloc-rust = "0.2.1"

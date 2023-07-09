@@ -1,3 +1,5 @@
+const LEVELLED: bool = false;
+
 pub mod client;
 pub mod optimised;
 pub mod plaintext;

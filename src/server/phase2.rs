@@ -118,7 +118,7 @@ pub fn pv_expand_batch(
             }
             i *= 2;
         }
-        dbg!(ones.first().unwrap().c_ref()[0].coefficients.shape()[0]);
+        // dbg!(ones.first().unwrap().c_ref()[0].coefficients.shape()[0]);
     });
 
     println!(

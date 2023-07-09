@@ -1,6 +1,7 @@
 use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
 use crate::utils::decrypt_and_print;
+use crate::LEVELLED;
 use crate::{
     optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,
@@ -11,9 +12,13 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
+use powers_x::{even_powers_of_x_ct, powers_of_x_ct};
+use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::slice::ParallelSliceMut;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
 pub mod phase2;
+pub mod powers_x;
 pub mod range_fn_fma;
 
 // rotate by 1 and perform plaintext mutiplication for each ell
@@ -62,133 +67,6 @@ pub fn pvw_decrypt(
     });
 
     sk_a
-}
-
-pub fn powers_of_x_ct(
-    x: &Ciphertext,
-    evaluator: &Evaluator,
-    ek: &EvaluationKey,
-    sk: &SecretKey,
-) -> Vec<Ciphertext> {
-    let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
-    let mut values = vec![dummy; 255];
-    let mut calculated = vec![0u64; 255];
-    values[0] = x.clone();
-    calculated[0] = 1;
-    // let mut mul_count = 0;
-
-    for i in (2..256).rev() {
-        let mut exp = i;
-        let mut base_deg = 1;
-        let mut res_deg = 0;
-
-        while exp > 0 {
-            if exp & 1 == 1 {
-                let p_res_deg = res_deg;
-                res_deg += base_deg;
-                if res_deg != base_deg && calculated[res_deg - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp = evaluator.mul(&values[p_res_deg - 1], &values[base_deg - 1]);
-                    values[res_deg - 1] = evaluator.relinearize(&tmp, ek);
-                    // println!("Res deg time: {:?}", now.elapsed());
-                    calculated[res_deg - 1] = 1;
-                    // mul_count += 1;
-                }
-            }
-            exp >>= 1;
-            if exp != 0 {
-                let p_base_deg = base_deg;
-                base_deg *= 2;
-                if calculated[base_deg - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp = evaluator.mul(&values[p_base_deg - 1], &values[p_base_deg - 1]);
-                    values[base_deg - 1] = evaluator.relinearize(&tmp, ek);
-
-                    // unsafe {
-                    //     decrypt_and_print(
-                    //         &values[base_deg - 1],
-                    //         sk,
-                    //         &format!("base_deg {base_deg}"),
-                    //     )
-                    // };
-
-                    // println!("Base deg time: {:?}", now.elapsed());
-                    calculated[base_deg - 1] = 1;
-
-                    // mul_count += 1;
-                }
-            }
-        }
-    }
-    // dbg!(mul_count);
-
-    values
-}
-
-pub fn even_powers_of_x_ct(
-    x: &Ciphertext,
-    evaluator: &Evaluator,
-    ek: &EvaluationKey,
-    sk: &SecretKey,
-) -> Vec<Ciphertext> {
-    let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
-    let mut values = vec![dummy; 128];
-    let mut calculated = vec![0u64; 128];
-
-    // x^2
-    let tmp = evaluator.mul(x, x);
-    values[0] = evaluator.relinearize(&tmp, ek);
-    calculated[0] = 1;
-    let mut mul_count = 0;
-
-    for i in (4..257).step_by(2).rev() {
-        // LSB of even value is 0. So we can ignore it.
-        let mut exp = i >> 1;
-        let mut base_deg = 2;
-        let mut res_deg = 0;
-
-        while exp > 0 {
-            if exp & 1 == 1 {
-                let p_res_deg = res_deg;
-                res_deg += base_deg;
-                if res_deg != base_deg && calculated[res_deg / 2 - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp = evaluator.mul(&values[p_res_deg / 2 - 1], &values[base_deg / 2 - 1]);
-                    values[res_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
-                    // println!("Res deg time: {:?}", now.elapsed());
-                    calculated[res_deg / 2 - 1] = 1;
-                    // mul_count += 1;
-                }
-            }
-            exp >>= 1;
-            if exp != 0 {
-                let p_base_deg = base_deg;
-                base_deg *= 2;
-                if calculated[base_deg / 2 - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp =
-                        evaluator.mul(&values[p_base_deg / 2 - 1], &values[p_base_deg / 2 - 1]);
-                    values[base_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
-
-                    // unsafe {
-                    //     decrypt_and_print(
-                    //         &values[base_deg - 1],
-                    //         sk,
-                    //         &format!("base_deg {base_deg}"),
-                    //     )
-                    // };
-
-                    // println!("Base deg time: {:?}", now.elapsed());
-                    calculated[base_deg / 2 - 1] = 1;
-
-                    // mul_count += 1;
-                }
-            }
-        }
-    }
-    // dbg!(mul_count);
-
-    values
 }
 
 pub fn range_fn(
@@ -283,6 +161,7 @@ pub fn range_fn(
 
 #[cfg(test)]
 mod tests {
+    use core::time;
     use std::{ascii::escape_default, f32::consts::E};
 
     use super::*;
@@ -336,72 +215,6 @@ mod tests {
             } else if *r != 0 {
                 assert_eq!(*r, 0);
             }
-        });
-    }
-
-    #[test]
-    fn powers_of_x_ct_works() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(5, 1 << 3);
-        let sk = SecretKey::random(params.degree, &mut rng);
-        let m = vec![3; params.degree];
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
-
-        {
-            for _ in 0..1 {
-                powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-            }
-        }
-
-        let now = std::time::Instant::now();
-        let powers_ct = powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-        println!("Time = {:?}", now.elapsed());
-
-        let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op);
-
-        izip!(powers_ct.iter(), res_values_mod.iter()).for_each(|(pct, v)| {
-            dbg!(evaluator.measure_noise(&sk, pct));
-            let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, pct), Encoding::default());
-            r.iter().for_each(|r0| {
-                assert!(r0 == v);
-            });
-        });
-    }
-
-    #[test]
-    fn even_powers_of_x_ct_works() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(5, 1 << 3);
-        let sk = SecretKey::random(params.degree, &mut rng);
-        let m = vec![3; params.degree];
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
-
-        {
-            for _ in 0..1 {
-                even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-            }
-        }
-
-        let now = std::time::Instant::now();
-        let powers_ct = even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-        println!("Time = {:?}", now.elapsed());
-
-        let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op);
-
-        izip!(res_values_mod.iter().skip(1).step_by(2), powers_ct.iter()).for_each(|(v, v_ct)| {
-            dbg!(evaluator.measure_noise(&sk, v_ct));
-            let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, v_ct), Encoding::default());
-            r.iter().for_each(|r0| {
-                assert!(r0 == v);
-            });
         });
     }
 }

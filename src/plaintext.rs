@@ -1,96 +1,67 @@
 use bfv::Modulus;
+use rayon::{
+    prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
+    slice::ParallelSliceMut,
+};
 
 use crate::utils::read_range_coeffs;
 
-pub fn powers_of_x_int(x: u64) -> Vec<u64> {
-    let mut val = 256;
-    let mut cache = vec![0u64; 256];
-    let mut calculated = vec![0u64; 256];
-    let mut mul_count = 0;
-    for i in (0..(val + 1)).rev() {
-        let mut exp = i;
-        let mut base = x;
-        let mut res = 1u64;
-        let mut base_deg = 1u64;
-        let mut res_deg = 0u64;
-        while exp > 0 {
-            if exp & 1 == 1 {
-                let p_res_deg = res_deg;
-                res_deg += base_deg;
-                if calculated[(res_deg - 1) as usize] == 1 {
-                    res = cache[(res_deg - 1) as usize];
-                } else {
-                    if res_deg == base_deg {
-                        res = base;
-                    } else {
-                        res = res.wrapping_mul(base);
-                        println!("{p_res_deg}, {base_deg}");
-                        mul_count += 1;
-                    }
-                    cache[(res_deg - 1) as usize] = res;
-                    calculated[(res_deg - 1) as usize] = 1;
-                }
-            }
-            exp >>= 1;
-            if exp != 0 {
-                let tmp = base_deg;
-                base_deg *= 2;
-                if calculated[(base_deg - 1) as usize] == 0 {
-                    base = base.wrapping_mul(base);
-                    println!("{tmp} base_deg");
-                    mul_count += 1;
-                    cache[(base_deg - 1) as usize] = base;
-                    calculated[(base_deg - 1) as usize] = 1;
-                } else {
-                    base = cache[(base_deg - 1) as usize];
-                }
-            }
-        }
+fn evalulate_powers(start: usize, end: usize, calculated: &mut [u64], bases: bool) {
+    // start is always a power of two. -1 is equal to mask.
+    let mask = start - 1;
+
+    // all values from start..start*2 require calculated value of start. So we calculated it here
+    if !bases {
+        calculated[start - 1] = calculated[start / 2 - 1] * calculated[start / 2 - 1];
     }
-    // dbg!(cache);
-    // dbg!(mul_count);
-    cache
+
+    // split at start+1 to assure that mutated values are disjoint
+    let (done, pending) = calculated.split_at_mut(start - 1 + 1);
+
+    // we only operate on slice from start+1 till end-1
+    let pending = &mut pending[..(end - 1 - start)];
+    let cores = 1;
+    let size = (pending.len() as f64 / cores as f64).ceil() as usize;
+
+    let pending_chunks = pending.par_chunks_mut(size);
+
+    pending_chunks
+        .enumerate()
+        .into_par_iter()
+        .for_each(|(index, chunk)| {
+            chunk.iter_mut().enumerate().for_each(|(chunk_index, v)| {
+                // calculate real_index of the value to figure out the mask
+                let real_index = size * index + chunk_index + start + 1;
+                *v = done.last().unwrap() * done[(real_index & mask) - 1];
+            });
+        });
 }
 
-pub fn powers_of_x_modulus(x: u64, modq: &Modulus) -> Vec<u64> {
-    let mut val = 256;
-    let mut cache = vec![0u64; 256];
-    let mut calculated = vec![0u64; 256];
+pub fn powers_of_x_modulus(x: u64, modq: &Modulus, degree: usize) -> Vec<u64> {
+    let mut cache = vec![0u64; degree];
+    let mut calculated = vec![0u64; degree];
+    cache[0] = x;
+    calculated[0] = 1;
     let mut mul_count = 0;
-    for i in (0..(val + 1)).rev() {
+    for i in (0..(degree + 1)).rev() {
         let mut exp = i;
-        let mut base = x;
-        let mut res = 1u64;
-        let mut base_deg = 1u64;
-        let mut res_deg = 0u64;
+        let mut base = 1usize;
+        let mut res = 0usize;
         while exp > 0 {
             if exp & 1 == 1 {
-                let p_res_deg = res_deg;
-                res_deg += base_deg;
-                if calculated[(res_deg - 1) as usize] == 1 {
-                    res = cache[(res_deg - 1) as usize];
-                } else {
-                    if res_deg == base_deg {
-                        res = base;
-                    } else {
-                        res = modq.mul_mod_fast(res, base);
-                        mul_count += 1;
-                    }
-                    cache[(res_deg - 1) as usize] = res;
-                    calculated[(res_deg - 1) as usize] = 1;
+                if res != 0 && calculated[res + base - 1] == 0 {
+                    cache[res + base - 1] = modq.mul_mod_fast(cache[res - 1], cache[base - 1]);
+                    calculated[res + base - 1] = 1;
                 }
+                res += base;
             }
             exp >>= 1;
             if exp != 0 {
-                base_deg *= 2;
-                if calculated[(base_deg - 1) as usize] == 0 {
-                    base = modq.mul_mod_fast(base, base);
-                    mul_count += 1;
-                    cache[(base_deg - 1) as usize] = base;
-                    calculated[(base_deg - 1) as usize] = 1;
-                } else {
-                    base = cache[(base_deg - 1) as usize];
+                if calculated[base * 2 - 1] == 0 {
+                    cache[base * 2 - 1] = modq.mul_mod_fast(cache[base - 1], cache[base - 1]);
+                    calculated[base * 2 - 1] = 1;
                 }
+                base *= 2;
             }
         }
     }
@@ -102,8 +73,8 @@ fn range_fn_modulus() {
 
     // value on which range_fn is evaluated
     let v = 28192;
-    let single = powers_of_x_modulus(v, &modq);
-    let double = powers_of_x_modulus(single[255], &modq);
+    let single = powers_of_x_modulus(v, &modq, 256);
+    let double = powers_of_x_modulus(single[255], &modq, 255);
 
     let range_coeff = read_range_coeffs();
 
@@ -129,54 +100,25 @@ fn range_fn_modulus() {
     dbg!(sum);
 }
 
-// Expensive clone()
-#[derive(Clone)]
-struct MyStruct {
-    coeffs: Vec<u64>,
-}
-impl MyStruct {
-    fn mul(&self, rhs: &MyStruct) -> MyStruct {
-        let res = self
-            .coeffs
-            .iter()
-            .zip(rhs.coeffs.iter())
-            .map(|(l, r)| l.wrapping_mul(*r))
-            .collect::<Vec<u64>>();
-        MyStruct { coeffs: res }
-    }
+mod tests {
+    use super::evalulate_powers;
 
-    fn zero() -> MyStruct {
-        MyStruct { coeffs: vec![] }
+    fn test_evaluate_even_powers() {
+        let mut calculated = vec![0; 128];
+        calculated[0] = 9;
+        calculated[4 / 2 - 1] = 3u64.pow(4);
+        calculated[8 / 2 - 1] = 3u64.pow(8);
+        calculated[16 / 2 - 1] = 3u64.pow(16);
+        calculated[32 / 2 - 1] = 3u64.pow(32);
+        calculated[64 / 2 - 1] = 3u64.pow(64);
+        calculated[128 / 2 - 1] = 3u64.pow(128);
+        calculated[256 / 2 - 1] = 3u64.pow(256);
+        // even powers
+        evalulate_powers(2, 4, &mut calculated, true);
+        evalulate_powers(4, 8, &mut calculated, true);
+        evalulate_powers(8, 16, &mut calculated, true);
+        evalulate_powers(16, 32, &mut calculated, true);
+        evalulate_powers(32, 64, &mut calculated, true);
+        evalulate_powers(64, 128, &mut calculated, true);
     }
-}
-fn powers_of_x(x: &MyStruct) -> Vec<MyStruct> {
-    let mut powers = vec![MyStruct::zero(); 256];
-    let mut calculated = vec![0u64; 256];
-
-    for i in (2..257).rev() {
-        let mut exp = i;
-        let mut base_deg = 1usize;
-        let mut res_deg = 0usize;
-        let mut prev_res_deg = 0usize;
-        while exp > 0 {
-            if exp & 1 == 1 {
-                prev_res_deg = res_deg;
-                res_deg += base_deg;
-                if calculated[res_deg - 1] == 0 && res_deg != base_deg {
-                    powers[res_deg - 1] = powers[prev_res_deg - 1].mul(&powers[base_deg - 1]);
-                    calculated[res_deg - 1] = 1;
-                }
-            }
-            exp >>= 1;
-            if exp != 0 {
-                let g = base_deg;
-                base_deg *= 2;
-                if calculated[base_deg - 1] == 0 {
-                    powers[base_deg - 1] = powers[g - 1].mul(&powers[g - 1]);
-                    calculated[base_deg - 1] = 1;
-                }
-            }
-        }
-    }
-    powers
 }
