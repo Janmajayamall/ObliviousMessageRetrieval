@@ -6,10 +6,12 @@ use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criteri
 use itertools::{izip, Itertools};
 use ndarray::Array2;
 use omr::{
-    server::range_fn_fma::{mul_poly_scalar_u128, optimised_range_fn_fma_u128, scalar_mul_u128},
+    server::range_fn::range_fn_fma::{
+        mul_poly_scalar_u128, optimised_range_fn_fma_u128, scalar_mul_u128,
+    },
     utils::precompute_range_constants,
 };
-use rand::{thread_rng, Rng};
+use rand::thread_rng;
 
 #[cfg(target_arch = "x86_64")]
 use omr::server::range_fn_fma::{

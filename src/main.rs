@@ -5,10 +5,7 @@ use bfv::{
 use itertools::{izip, Itertools};
 use ndarray::Array2;
 use rand::thread_rng;
-use rayon::{
-    prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator},
-    slice::ParallelSliceMut,
-};
+use rayon::slice::ParallelSliceMut;
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
@@ -19,12 +16,14 @@ use std::{
 use omr::{
     client::{encrypt_pvw_sk, gen_pv_exapnd_rtgs},
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
-    preprocessing::{pre_process_batch, precompute_expand_32_roll_pt, precompute_indices_pts},
+    preprocessing::pre_process_batch,
     pvw::*,
     server::{
         phase2,
-        powers_x::{even_powers_of_x_ct, powers_of_x_ct},
-        pvw_decrypt, range_fn,
+        powers_x::evaluate_powers,
+        pvw_decrypt,
+        pvw_decrypt::pvw_decrypt,
+        range_fn::{range_fn, range_fn_4_times},
     },
     time_it,
     utils::precompute_range_constants,
@@ -36,10 +35,11 @@ fn phase1() {
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = BfvParameters::default(15, 1 << 8);
     let sk = SecretKey::random(params.degree, &mut rng);
 
     // generate hints
+    println!("Generating clues...");
     let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
     let clues = (0..params.degree)
         .into_iter()
@@ -58,8 +58,7 @@ fn phase1() {
     let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
 
     println!("Running Pvw decrypt...");
-    let mut now = std::time::Instant::now();
-    let decryted_cts = pvw_decrypt(
+    let decrypted_cts = pvw_decrypt(
         &pvw_params,
         &evaluator,
         &hint_a,
@@ -68,9 +67,8 @@ fn phase1() {
         ek.get_rtg_ref(1, 0),
         &sk,
     );
-    println!("Pvw decryption time: {:?}", now.elapsed());
 
-    decryted_cts.iter().for_each(|ct| {
+    decrypted_cts.iter().for_each(|ct| {
         println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
     });
 
@@ -79,35 +77,22 @@ fn phase1() {
 
     println!("Running range function...");
     // ranged cts are in coefficient form
-    now = std::time::Instant::now();
-    let ranged_cts = decryted_cts
-        .iter()
-        .map(|ct| {
-            range_fn(
-                &ct,
-                &evaluator,
-                &ek,
-                &constants,
-                &sub_from_one_precompute,
-                &sk,
-            )
-        })
-        .collect_vec();
-    println!("Range function time: {:?}", now.elapsed());
+    let ranged_cts = range_fn_4_times(
+        &decrypted_cts,
+        &evaluator,
+        &ek,
+        &constants,
+        &sub_from_one_precompute,
+        &sk,
+    );
 
-    ranged_cts.iter().for_each(|ct| {
-        assert!(ct.c_ref()[0].representation == Representation::Coefficient);
-        println!("Ranged Ct noise: {}", evaluator.measure_noise(&sk, ct));
-    });
-
-    now = std::time::Instant::now();
     // multiplication tree
     // ct[0] * ct[1]          ct[2] * ct[4]
     //      v0         *          v1
     //                v
-    let v0 = evaluator.mul(&ranged_cts[0], &ranged_cts[0]);
+    let v0 = evaluator.mul(&ranged_cts.0 .0, &ranged_cts.0 .1);
     let v0 = evaluator.relinearize(&v0, &ek);
-    let v1 = evaluator.mul(&ranged_cts[2], &ranged_cts[3]);
+    let v1 = evaluator.mul(&ranged_cts.1 .0, &ranged_cts.1 .1);
     let v1 = evaluator.relinearize(&v1, &ek);
 
     println!("v0 noise: {}", evaluator.measure_noise(&sk, &v0));
@@ -121,7 +106,6 @@ fn phase1() {
     // use normal `relinearize` the output will be in coefficient form and will have to pay
     // for additional 2 Ntts of size Q to convert ouput to evaluation.
     let mut v = evaluator.relinearize(&v, &ek);
-    println!("Multiplication time: {:?}", now.elapsed());
 
     println!("phase 1 end ct noise: {}", evaluator.measure_noise(&sk, &v));
 
@@ -138,139 +122,72 @@ fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &mut Ciphertext) {
     println!("Phase 2 end noise: {}", evaluator.measure_noise(sk, pv));
 }
 
-/// Time of `even_powers_of_x_ct` should be half of `powers_of_x_ct`
-fn time_dff_even_all_powers_of_x() {
-    let mut rng = thread_rng();
-    let params = BfvParameters::default(15, 1 << 8);
-    let sk = SecretKey::random(params.degree, &mut rng);
-    let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
-
-    let m = vec![3; params.degree];
-
-    let evaluator = Evaluator::new(params);
-    let pt = evaluator.plaintext_encode(&m, Encoding::default());
-    let ct = evaluator.encrypt(&sk, &pt, &mut rng);
-
-    {
-        for _ in 0..2 {
-            let _ = powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-        }
-    }
-
-    let now = std::time::Instant::now();
-    let even_powers_ct = even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-    println!("Time even_powers_of_x_ct = {:?}", now.elapsed());
-
-    let now = std::time::Instant::now();
-    let powers_ct = powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-    println!("Time powers_of_x_ct = {:?}", now.elapsed());
-}
-
-fn dist_range_fn() {
+fn powers_of_x() {
     let mut rng = thread_rng();
     let params = BfvParameters::default(15, 1 << 15);
     let sk = SecretKey::random(params.degree, &mut rng);
     let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
 
-    let m = vec![3; params.degree];
-
+    let m = params
+        .plaintext_modulus_op
+        .random_vec(params.degree, &mut rng);
     let evaluator = Evaluator::new(params);
     let pt = evaluator.plaintext_encode(&m, Encoding::default());
     let ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
-    let decrypted_cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
-    let constants = precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
-    let sub_from_one_precompute = sub_from_one_precompute(evaluator.params(), 0);
+    let cores = 1;
 
-    let threads = (rayon::current_num_threads() as f64 / 4.0).ceil() as usize;
-
-    time_it!("Range fn 4 times",
-    let final_v = rayon::join(
-        || {
-            let v = rayon::join(
-                || {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .unwrap();
-                    pool.install(|| {
-                        println!("Running 0 with {threads} threads...");
-                        range_fn(
-                            &decrypted_cts[0],
-                            &evaluator,
-                            &ek,
-                            &constants,
-                            &sub_from_one_precompute,
-                            &sk,
-                        )
-                    })
-                },
-                || {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .unwrap();
-                    pool.install(|| {
-                        println!("Running 1 with {threads} threads...");
-                        range_fn(
-                            &decrypted_cts[1],
-                            &evaluator,
-                            &ek,
-                            &constants,
-                            &sub_from_one_precompute,
-                            &sk,
-                        )
-                    })
-                },
-            );
-            v
-        },
-        || {
-            let v = rayon::join(
-                || {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .unwrap();
-                    pool.install(|| {
-                        println!("Running 2 with {threads} threads...");
-                        range_fn(
-                            &decrypted_cts[2],
-                            &evaluator,
-                            &ek,
-                            &constants,
-                            &sub_from_one_precompute,
-                            &sk,
-                        )
-                    })
-                },
-                || {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .unwrap();
-                    pool.install(|| {
-                        println!("Running 3 with {threads} threads...");
-                        range_fn(
-                            &decrypted_cts[3],
-                            &evaluator,
-                            &ek,
-                            &constants,
-                            &sub_from_one_precompute,
-                            &sk,
-                        )
-                    })
-                },
-            );
-            v
-        },
-    );
+    time_it!("Powers of x [1,256) time: ",
+        let placeholder = Ciphertext::placeholder();
+        let mut calculated = vec![placeholder.clone(); 255];
+        calculated[0] = ct;
+        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores);
     );
 }
+
+/// Wrapper for setting up necessary things before calling range_fn
+fn call_range_fn_once() {
+    let params = BfvParameters::default(15, 1 << 15);
+    let level = 0;
+    let ctx = params.poly_ctx(&PolyType::Q, level);
+
+    let mut rng = thread_rng();
+    let constants = precompute_range_constants(&ctx);
+    let sub_one_precompute = sub_from_one_precompute(&params, level);
+
+    let sk = SecretKey::random(params.degree, &mut rng);
+    let mut m = params
+        .plaintext_modulus_op
+        .random_vec(params.degree, &mut rng);
+
+    let evaluator = Evaluator::new(params);
+    let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+    let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+    // gen evaluation key
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
+
+    time_it!("Range fn time: ",
+        let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    );
+}
+
 fn main() {
+    let threads = 8;
+    // set global thread pool
     rayon::ThreadPoolBuilder::new()
-        .num_threads(8)
+        .num_threads(threads)
         .build_global()
         .unwrap();
-    dist_range_fn();
+
+    powers_of_x();
+    call_range_fn_once();
+
+    // range_fn_trial();
 }

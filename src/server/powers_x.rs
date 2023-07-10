@@ -55,15 +55,6 @@ pub fn powers_of_x_ct(
                     let tmp = evaluator.mul(&values[p_base_deg - 1], &values[p_base_deg - 1]);
                     values[base_deg - 1] = evaluator.relinearize(&tmp, ek);
 
-                    // unsafe {
-                    //     decrypt_and_print(
-                    //         &values[base_deg - 1],
-                    //         sk,
-                    //         &format!("base_deg {base_deg}"),
-                    //     )
-                    // };
-
-                    // println!("Base deg time: {:?}", now.elapsed());
                     calculated[base_deg - 1] = 1;
 
                     // mul_count += 1;
