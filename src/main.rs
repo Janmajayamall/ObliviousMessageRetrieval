@@ -21,8 +21,7 @@ use omr::{
     server::{
         phase2,
         powers_x::evaluate_powers,
-        pvw_decrypt,
-        pvw_decrypt::pvw_decrypt,
+        pvw_decrypt::{pvw_decrypt, pvw_decrypt_precomputed, pvw_setup},
         range_fn::{range_fn, range_fn_4_times},
     },
     time_it,
@@ -151,6 +150,82 @@ fn powers_of_x() {
     );
 }
 
+fn call_pvw_decrypt() {
+    let mut rng = thread_rng();
+    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+
+    let params = BfvParameters::default(15, 1 << 15);
+    let sk = SecretKey::random(params.degree, &mut rng);
+
+    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..params.degree)
+        .into_iter()
+        .map(|_| clue1.clone())
+        .collect_vec();
+
+    let evaluator = Evaluator::new(params);
+
+    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
+
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+
+    time_it!("Pvw Decrypt",
+        let _ = pvw_decrypt(
+                &pvw_params,
+                &evaluator,
+                &hint_a,
+                &hint_b,
+                &pvw_sk_cts,
+                ek.get_rtg_ref(1, 0),
+                &sk,
+            );
+    );
+}
+
+fn call_pvw_decrypt_precomputed() {
+    let mut rng = thread_rng();
+    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+
+    let params = BfvParameters::default(15, 1 << 15);
+    let sk = SecretKey::random(params.degree, &mut rng);
+
+    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..params.degree)
+        .into_iter()
+        .map(|_| clue1.clone())
+        .collect_vec();
+
+    let evaluator = Evaluator::new(params);
+
+    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
+
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+
+    println!("Running precomputation...");
+    let precomputed_pvw_sk_cts = pvw_setup(&evaluator, &ek, &pvw_sk_cts);
+
+    println!("Starting decrypt...");
+    time_it!("Pvw Decrypt Precomputed",
+        let _ = pvw_decrypt_precomputed(
+                &pvw_params,
+                &evaluator,
+                &hint_a,
+                &hint_b,
+                &precomputed_pvw_sk_cts,
+                ek.get_rtg_ref(1, 0),
+                &sk,
+            );
+    );
+}
+
 /// Wrapper for setting up necessary things before calling range_fn
 fn call_range_fn_once() {
     let params = BfvParameters::default(15, 1 << 15);
@@ -186,8 +261,11 @@ fn main() {
         .build_global()
         .unwrap();
 
-    powers_of_x();
-    call_range_fn_once();
+    // call_pvw_decrypt();
+    call_pvw_decrypt_precomputed();
+
+    // powers_of_x();
+    // call_range_fn_once();
 
     // range_fn_trial();
 }

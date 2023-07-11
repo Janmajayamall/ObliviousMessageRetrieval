@@ -14,7 +14,7 @@ use omr::{
 use rand::thread_rng;
 
 #[cfg(target_arch = "x86_64")]
-use omr::server::range_fn_fma::{
+use omr::server::range_fn::range_fn_fma::{
     fma_poly_scale_slice_hexl, mul_poly_scalar_slice_hexl, optimised_range_fn_fma_hexl,
 };
 
