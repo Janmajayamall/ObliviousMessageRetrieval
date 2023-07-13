@@ -69,13 +69,13 @@ pub fn sub_from_one_precompute(params: &BfvParameters, level: usize) -> Vec<u64>
 /// coefficient form, then you can simply reduce (optimisation!) calculating pt(1) - ct to `([[Q]_t * -t_inv]_Q - ct[0]) % Q`. Therefore
 /// instead of `degree` modulus subtraction, we do 1 + `degree - 1` subtraction.
 pub fn sub_from_one(params: &BfvParameters, ct: &mut Ciphertext, precomputes: &[u64]) {
-    debug_assert!(ct.c_ref()[0].representation == Representation::Coefficient);
+    debug_assert!(ct.c_ref()[0].representation() == &Representation::Coefficient);
 
     let ctx = params.poly_ctx(&ct.poly_type(), ct.level());
     assert!(precomputes.len() == ctx.moduli_count());
 
     izip!(
-        ct.c_ref_mut()[0].coefficients.outer_iter_mut(),
+        ct.c_ref_mut()[0].coefficients_mut().outer_iter_mut(),
         ctx.moduli_ops().iter(),
         precomputes.iter(),
     )
@@ -95,7 +95,7 @@ pub fn sub_from_one(params: &BfvParameters, ct: &mut Ciphertext, precomputes: &[
     });
 
     izip!(
-        ct.c_ref_mut()[1].coefficients.outer_iter_mut(),
+        ct.c_ref_mut()[1].coefficients_mut().outer_iter_mut(),
         ctx.moduli_ops().iter(),
     )
     .for_each(|(mut coeffs, modqi)| {
@@ -113,14 +113,14 @@ pub fn fma_reverse_u128_vec(a: &mut [u128], b: &[u64], c: &[u64]) {
 }
 
 pub fn fma_reverse_u128_poly(d: &mut Array2<u128>, s: &Poly, h: &Poly) {
-    debug_assert!(s.representation == h.representation);
-    debug_assert!(s.representation == Representation::Evaluation);
-    debug_assert!(d.shape() == s.coefficients.shape());
+    debug_assert!(s.representation() == h.representation());
+    debug_assert!(s.representation() == &Representation::Evaluation);
+    debug_assert!(d.shape() == s.coefficients().shape());
 
     izip!(
         d.outer_iter_mut(),
-        s.coefficients.outer_iter(),
-        h.coefficients.outer_iter()
+        s.coefficients().outer_iter(),
+        h.coefficients().outer_iter()
     )
     .for_each(|(mut d, a, b)| {
         fma_reverse_u128_vec(
@@ -145,7 +145,7 @@ pub fn optimised_pvw_fma_with_rot(
     debug_assert!(sec_len <= 512);
 
     // let mut d = Poly::zero(&ctx, &Representation::Evaluation);
-    let shape = s.c_ref()[0].coefficients.shape();
+    let shape = s.c_ref()[0].coefficients().shape();
     let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
 
@@ -180,7 +180,7 @@ pub fn optimised_pvw_fma(
     // only works and sec_len <= 512 otherwise overflows
     debug_assert!(sec_len <= 512);
 
-    let shape = s.c_ref()[0].coefficients.shape();
+    let shape = s.c_ref()[0].coefficients().shape();
     let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     for i in 0..sec_len {
@@ -200,7 +200,7 @@ pub fn add_u128(r: &mut [u128], a: &[u64]) {
 /// A lot slower than naively adding ciphertexts because u128 additions are
 /// lot more expensive than 1 u64 add + 1 u64 cmp (atleast on m1).
 pub fn optimised_add_range_fn(res: &mut Array2<u128>, p: &Poly) {
-    azip!(res.outer_iter_mut(), p.coefficients.outer_iter(),).for_each(|mut r, a| {
+    azip!(res.outer_iter_mut(), p.coefficients().outer_iter(),).for_each(|mut r, a| {
         add_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap());
     });
 }

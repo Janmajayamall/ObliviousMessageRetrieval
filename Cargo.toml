@@ -30,7 +30,6 @@ lvl = []
 noise = []
 
 
-
 [dev-dependencies]
 criterion = "0.4"
 mimalloc-rust = "0.2.1"

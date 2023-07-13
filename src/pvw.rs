@@ -37,37 +37,6 @@ pub struct PvwCiphertext {
     pub b: Vec<u64>,
 }
 
-// impl PvwCiphertext {
-//     pub fn to_bytes(&self) -> Vec<u8> {
-//         let proto = PvwCiphertextProto::from(self);
-//         proto.write_to_bytes().unwrap()
-//     }
-
-//     pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> Option<PvwCiphertext> {
-//         let from = PvwCiphertextProto::parse_from_bytes(bytes).ok()?;
-//         let p_bits = (64 - (par.q - 1).leading_zeros()) as usize;
-//         let v = transcode_from_bytes(&from.v, p_bits);
-//         let b = v[..par.ell].to_vec();
-//         let a = v[par.ell..(par.ell + par.n)].to_vec();
-
-//         Some(PvwCiphertext {
-//             par: par.clone(),
-//             a,
-//             b,
-//         })
-//     }
-// }
-
-// impl From<&PvwCiphertext> for PvwCiphertextProto {
-//     fn from(value: &PvwCiphertext) -> Self {
-//         let mut proto = PvwCiphertextProto::new();
-//         let p_bits = (64 - (value.par.q - 1).leading_zeros()) as usize;
-//         let v = [value.b.clone(), value.a.clone()].concat();
-//         proto.v = transcode_to_bytes(&v, p_bits);
-//         proto
-//     }
-// }
-
 pub struct PvwPublicKey {
     a: Array2<u64>,
     b: Array2<u64>,
@@ -119,51 +88,7 @@ impl PvwPublicKey {
             b: be.to_vec(),
         }
     }
-
-    // pub fn to_bytes(&self) -> Vec<u8> {
-    //     let proto = PvwPublicKeyProto::from(self);
-    //     proto.write_to_bytes().unwrap()
-    // }
-
-    // pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> PvwPublicKey {
-    //     let from = PvwPublicKeyProto::parse_from_bytes(bytes).unwrap();
-
-    //     let seed = <ChaChaRng as SeedableRng>::Seed::try_from(from.seed).unwrap();
-    //     let mut rng = ChaChaRng::from_seed(seed);
-    //     let a = Modulus::new(par.q)
-    //         .unwrap()
-    //         .random_vec(par.n * par.m, &mut rng);
-
-    //     let p_bits = 64 - (par.q - 1).leading_zeros() as usize;
-    //     let mut b = transcode_from_bytes(&from.b, p_bits);
-    //     b.truncate(par.ell * par.m);
-
-    //     PvwPublicKey {
-    //         a: Array::from_shape_vec((par.n, par.m), a).unwrap(),
-    //         b: Array::from_shape_vec((par.ell, par.m), b).unwrap(),
-    //         par: par.clone(),
-    //         seed,
-    //     }
-    // }
 }
-
-// impl From<&PvwPublicKey> for PvwPublicKeyProto {
-//     fn from(value: &PvwPublicKey) -> Self {
-//         let mut proto = PvwPublicKeyProto::new();
-//         let p_bits = 64 - (value.par.q - 1).leading_zeros() as usize;
-//         proto.seed = value.seed.to_vec();
-//         proto.b = transcode_to_bytes(
-//             value
-//                 .b
-//                 .outer_iter()
-//                 .flat_map(|ell_m| ell_m.to_vec())
-//                 .collect_vec()
-//                 .as_slice(),
-//             p_bits,
-//         );
-//         proto
-//     }
-// }
 
 pub struct PvwSecretKey {
     pub key: Array2<u64>,
@@ -275,41 +200,7 @@ impl PvwSecretKey {
             })
             .collect()
     }
-
-    // pub fn to_bytes(&self) -> Vec<u8> {
-    //     let proto = PvwSecretKeyProto::from(self);
-    //     proto.write_to_bytes().unwrap()
-    // }
-
-    // pub fn from_bytes(bytes: &[u8], par: &Arc<PvwParameters>) -> PvwSecretKey {
-    //     let from = PvwSecretKeyProto::parse_from_bytes(bytes).unwrap();
-    //     let p_bits = 64 - (par.q - 1).leading_zeros() as usize;
-    //     let mut key = transcode_from_bytes(&from.key, p_bits);
-    //     key.truncate(par.ell * par.n);
-    //     PvwSecretKey {
-    //         key: Array::from_shape_vec((par.ell, par.n), key).unwrap(),
-    //         par: par.clone(),
-    //     }
-    // }
 }
-
-// impl From<&PvwSecretKey> for PvwSecretKeyProto {
-//     fn from(value: &PvwSecretKey) -> Self {
-//         let mut proto = PvwSecretKeyProto::new();
-//         let p_bits = 64 - (value.par.q - 1).leading_zeros() as usize;
-//         proto.key = transcode_to_bytes(
-//             value
-//                 .key
-//                 .outer_iter()
-//                 .flat_map(|ell_i| ell_i.to_vec())
-//                 .collect_vec()
-//                 .as_slice(),
-//             p_bits,
-//         );
-
-//         proto
-//     }
-// }
 
 #[cfg(test)]
 mod tests {

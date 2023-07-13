@@ -26,7 +26,7 @@ pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
 pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u64]) {
     izip!(
         res.outer_iter_mut(),
-        a.coefficients.outer_iter(),
+        a.coefficients().outer_iter(),
         scalar_slice.iter(),
     )
     .for_each(|(mut r, a, s)| {

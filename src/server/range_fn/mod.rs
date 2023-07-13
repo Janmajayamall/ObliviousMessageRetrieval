@@ -1,24 +1,12 @@
-use super::powers_x::{even_powers_of_x_ct, powers_of_x_ct};
-use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
-use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
+use crate::optimised::sub_from_one;
 use crate::server::powers_x::evaluate_powers;
 use crate::time_it;
-use crate::utils::decrypt_and_print;
-use crate::{
-    optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
-    pvw::PvwParameters,
-};
 use bfv::{
-    BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyContext,
-    PolyType, RelinearizationKey, Representation, SecretKey,
+    Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyContext, PolyType,
+    RelinearizationKey, Representation, SecretKey,
 };
-use core::time;
-use itertools::{izip, Itertools};
-use ndarray::{s, Array2};
-use rand_chacha::rand_core::le;
-use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
-use rayon::slice::ParallelSliceMut;
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use itertools::Itertools;
+use ndarray::Array2;
 
 pub mod range_fn_fma;
 
@@ -145,8 +133,8 @@ pub fn range_fn(
             .c_ref()
             .iter()
             .map(|p| {
-                let coeffs = p.coefficients.to_owned();
-                Poly::new(coeffs, p.representation.clone())
+                let coeffs = p.coefficients().to_owned();
+                Poly::new(coeffs, p.representation().clone())
             })
             .collect_vec();
 
@@ -155,6 +143,11 @@ pub fn range_fn(
 
     rayon::join(
         || {
+            // For k_powers we only need to calculate even powers in the range [1,256]. Recall that
+            // all even numbers in a given range can be written by multiplying all numbers in half of the range.
+            // For example, all even numbers in range [1,256] can be obtained by multipying all values in
+            // range [1,128] by 2. Thus to calculate only even powers in range [0, 256] we calculate all powers
+            // of `a` in range [1,128] where `a=x^2`.
             evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, cores);
             evaluate_powers(evaluator, ek, 4, 8, &mut k_powers, true, cores);
             evaluate_powers(evaluator, ek, 8, 16, &mut k_powers, true, cores);
@@ -282,6 +275,7 @@ pub fn range_fn_4_times(
 #[cfg(test)]
 mod tests {
     use core::time;
+    use itertools::izip;
     use std::{ascii::escape_default, f32::consts::E};
 
     use super::*;

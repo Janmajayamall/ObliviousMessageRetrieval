@@ -32,7 +32,7 @@ pub fn fma_poly(
         .c_ref()
         .first()
         .unwrap()
-        .coefficients
+        .coefficients()
         .shape();
 
     let mut res0 = Array2::<u128>::zeros((coeff_shape[0], coeff_shape[1]));
@@ -125,7 +125,7 @@ pub fn pv_expand_batch(
         "Pv expand took for batch_size {}: {:?} level{}",
         pts_32.len(),
         now.elapsed(),
-        ones.first().unwrap().c_ref()[0].coefficients.shape()[0]
+        ones.first().unwrap().c_ref()[0].coefficients().shape()[0]
     );
 
     ones

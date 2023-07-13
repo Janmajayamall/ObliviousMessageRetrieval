@@ -77,7 +77,7 @@ pub fn optimised_pvw_fma_with_rot(
 ) -> (Array2<u128>, Array2<u128>) {
     debug_assert!(sec_len <= 512);
 
-    let shape = s.c_ref()[0].coefficients.shape();
+    let shape = s.c_ref()[0].coefficients().shape();
     let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
 

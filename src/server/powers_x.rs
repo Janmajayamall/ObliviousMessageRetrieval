@@ -1,20 +1,12 @@
-use crate::utils::decrypt_and_print;
-use crate::{
-    optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
-    pvw::PvwParameters,
-};
 use bfv::{
     BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyType,
     RelinearizationKey, Representation, SecretKey,
 };
-use itertools::{izip, Itertools};
-use ndarray::{s, Array2};
-use rayon::prelude::{
-    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
-};
-use rayon::slice::ParallelSliceMut;
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use rayon::prelude::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
+/// Calculates all powers of `x` for range [1,256) using binary exponentiation
+///
+/// Note: not used anywhere. Just for testing.
 pub fn powers_of_x_ct(
     x: &Ciphertext,
     evaluator: &Evaluator,
@@ -67,72 +59,20 @@ pub fn powers_of_x_ct(
     values
 }
 
-pub fn even_powers_of_x_ct(
-    x: &Ciphertext,
-    evaluator: &Evaluator,
-    ek: &EvaluationKey,
-    sk: &SecretKey,
-) -> Vec<Ciphertext> {
-    let dummy = Ciphertext::new(vec![], PolyType::Q, 0);
-    let mut values = vec![dummy; 128];
-    let mut calculated = vec![0u64; 128];
-
-    // x^2
-    let tmp = evaluator.mul(x, x);
-    values[0] = evaluator.relinearize(&tmp, ek);
-    calculated[0] = 1;
-    let mut mul_count = 0;
-
-    for i in (4..257).step_by(2).rev() {
-        // LSB of even value is 0. So we can ignore it.
-        let mut exp = i >> 1;
-        let mut base_deg = 2;
-        let mut res_deg = 0;
-
-        while exp > 0 {
-            if exp & 1 == 1 {
-                let p_res_deg = res_deg;
-                res_deg += base_deg;
-                if res_deg != base_deg && calculated[res_deg / 2 - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp = evaluator.mul(&values[p_res_deg / 2 - 1], &values[base_deg / 2 - 1]);
-                    values[res_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
-                    // println!("Res deg time: {:?}", now.elapsed());
-                    calculated[res_deg / 2 - 1] = 1;
-                    // mul_count += 1;
-                }
-            }
-            exp >>= 1;
-            if exp != 0 {
-                let p_base_deg = base_deg;
-                base_deg *= 2;
-                if calculated[base_deg / 2 - 1] == 0 {
-                    // let now = Instant::now();
-                    let tmp =
-                        evaluator.mul(&values[p_base_deg / 2 - 1], &values[p_base_deg / 2 - 1]);
-                    values[base_deg / 2 - 1] = evaluator.relinearize(&tmp, ek);
-
-                    // unsafe {
-                    //     decrypt_and_print(
-                    //         &values[base_deg - 1],
-                    //         sk,
-                    //         &format!("base_deg {base_deg}"),
-                    //     )
-                    // };
-
-                    // println!("Base deg time: {:?}", now.elapsed());
-                    calculated[base_deg / 2 - 1] = 1;
-
-                    // mul_count += 1;
-                }
-            }
-        }
-    }
-    // dbg!(mul_count);
-
-    values
-}
-
+/// Calcultes power of x for range [start, end) in parallel. Assumes that all
+/// powers in range [0, start) are pre-calculated and stored in `calculated`.
+///
+/// Set `bases` to true if `base` power for the range has already calculated and
+/// stored in `calculated`.
+///
+/// If base is not calculated, the performs end-start+1 ciphertext multiplications.
+/// Otherwise performs end-start ciphertext multiplications.
+///
+/// To understand the function, consider the base power as `x^start`. We assume that
+/// `start` is always a power of 2. All values in range [start, end) can be calculated
+/// by adding base with some value in range [0,start). For example, if start is 128
+/// (b10000000) then to calculate 250 (b 1 1111010), we write it as sum of 128 +
+/// 122 (b 0 1111010). Thus, to calculate x^250 by multiply `x^128 * x^122`.
 pub fn evaluate_powers(
     evaluator: &Evaluator,
     ek: &EvaluationKey,
@@ -142,23 +82,27 @@ pub fn evaluate_powers(
     bases: bool,
     cores: usize,
 ) {
-    // start is always a power of two. -1 is equal to mask.
+    // start is always a power of two. Hence, start-1 equals the mask to extract log2(start) bits
     let mask = start - 1;
 
-    // all values from start..start*2 require calculated value of start. So we calculated it here
+    // To calculate values in range (start, start*2) we require value for start, that is the base
     if !bases {
         let tmp = evaluator.mul(&calculated[start / 2 - 1], &calculated[start / 2 - 1]);
         calculated[start - 1] = evaluator.relinearize(&tmp, ek);
     }
 
-    // split at start+1 to assure that mutated values are disjoint
+    // To avoid running to borrow issues later, split `calculated` at `start+1` where the second chunk will
+    // be mutated
     let (done, pending) = calculated.split_at_mut(start - 1 + 1);
 
-    // we only operate on slice from start+1 till end-1
+    // Since we only need to calculate for range [start+1, end-1], slice off the rest
     let pending = &mut pending[..(end - 1 - start)];
     let size = (pending.len() as f64 / cores as f64).ceil() as usize;
 
     pending.par_iter_mut().enumerate().for_each(|(index, v)| {
+        // calculate real_index for power to figure out which other power to multiply base with.
+        // For ex, if real_index = 5 (ie x^5) then we must multiply x^4 with x^1 since x^4 is the base
+        // and 1 equals to `5 & mask` (ie 101 & 011 = 1).
         let real_index = index + start + 1;
         let tmp = evaluator.mul(done.last().unwrap(), &done[(real_index & mask) - 1]);
         *v = evaluator.relinearize(&tmp, ek);
@@ -183,6 +127,7 @@ mod tests {
 
     use super::*;
     use bfv::{BfvParameters, Encoding};
+    use itertools::izip;
     use rand::thread_rng;
 
     #[test]
@@ -266,39 +211,6 @@ mod tests {
         izip!(powers_ct.iter(), res_values_mod.iter()).for_each(|(pct, v)| {
             dbg!(evaluator.measure_noise(&sk, pct));
             let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, pct), Encoding::default());
-            r.iter().for_each(|r0| {
-                assert!(r0 == v);
-            });
-        });
-    }
-
-    #[test]
-    fn even_powers_of_x_ct_works() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(5, 1 << 3);
-        let sk = SecretKey::random(params.degree, &mut rng);
-        let m = vec![3; params.degree];
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
-
-        {
-            for _ in 0..1 {
-                even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-            }
-        }
-
-        let now = std::time::Instant::now();
-        let powers_ct = even_powers_of_x_ct(&ct, &evaluator, &ek, &sk);
-        println!("Time = {:?}", now.elapsed());
-
-        let res_values_mod = powers_of_x_modulus(3, &evaluator.params().plaintext_modulus_op, 256);
-
-        izip!(res_values_mod.iter().skip(1).step_by(2), powers_ct.iter()).for_each(|(v, v_ct)| {
-            dbg!(evaluator.measure_noise(&sk, v_ct));
-            let r = evaluator.plaintext_decode(&evaluator.decrypt(&sk, v_ct), Encoding::default());
             r.iter().for_each(|r0| {
                 assert!(r0 == v);
             });

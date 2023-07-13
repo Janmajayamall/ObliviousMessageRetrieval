@@ -6,7 +6,7 @@ use rayon::{
 
 use crate::utils::read_range_coeffs;
 
-fn evalulate_powers(start: usize, end: usize, calculated: &mut [u64], bases: bool) {
+fn evaluate_powers(start: usize, end: usize, calculated: &mut [u64], bases: bool) {
     // start is always a power of two. -1 is equal to mask.
     let mask = start - 1;
 
@@ -101,8 +101,9 @@ fn range_fn_modulus() {
 }
 
 mod tests {
-    use super::evalulate_powers;
+    use super::evaluate_powers;
 
+    #[test]
     fn test_evaluate_even_powers() {
         let mut calculated = vec![0; 128];
         calculated[0] = 9;
@@ -114,11 +115,11 @@ mod tests {
         calculated[128 / 2 - 1] = 3u64.pow(128);
         calculated[256 / 2 - 1] = 3u64.pow(256);
         // even powers
-        evalulate_powers(2, 4, &mut calculated, true);
-        evalulate_powers(4, 8, &mut calculated, true);
-        evalulate_powers(8, 16, &mut calculated, true);
-        evalulate_powers(16, 32, &mut calculated, true);
-        evalulate_powers(32, 64, &mut calculated, true);
-        evalulate_powers(64, 128, &mut calculated, true);
+        evaluate_powers(2, 4, &mut calculated, true);
+        evaluate_powers(4, 8, &mut calculated, true);
+        evaluate_powers(8, 16, &mut calculated, true);
+        evaluate_powers(16, 32, &mut calculated, true);
+        evaluate_powers(32, 64, &mut calculated, true);
+        evaluate_powers(64, 128, &mut calculated, true);
     }
 }
