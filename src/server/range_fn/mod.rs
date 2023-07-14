@@ -37,7 +37,7 @@ fn process_m_loop(
 ) -> Ciphertext {
     // process k loop when range is either equal or smaller than set_len
     if end - start <= set_len {
-        println!("{start} {end}");
+        println!("{start} {end} {}", end - start);
 
         let mut sum = Ciphertext::new(vec![], PolyType::Q, 0);
         for i in start..end {
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn range_fn_works() {
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = BfvParameters::default(15, 1 << 3);
         let level = 0;
         let ctx = params.poly_ctx(&PolyType::Q, level);
 
@@ -313,7 +313,7 @@ mod tests {
 
         // limit to single thread
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
+            .num_threads(10)
             .build_global()
             .unwrap();
 

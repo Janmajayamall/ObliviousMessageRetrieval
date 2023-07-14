@@ -97,9 +97,9 @@ fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &mut Ciphertext) {
     evaluator.mod_down_level(pv, 12);
     dbg!(pv.level());
     let ek = gen_pv_exapnd_rtgs(evaluator.params(), sk, 12);
-    phase2::phase2(evaluator, pv, &ek, sk, 12);
+    // phase2::phase2(evaluator, pv, &ek, sk, 12);
 
-    println!("Phase 2 end noise: {}", evaluator.measure_noise(sk, pv));
+    // println!("Phase 2 end noise: {}", evaluator.measure_noise(sk, pv));
 }
 
 fn powers_of_x() {

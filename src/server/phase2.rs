@@ -1,12 +1,13 @@
 use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{
-    precompute_expand_32_roll_pt, procompute_expand_roll_pt, read_indices_poly,
+    compute_weight_pts, precompute_expand_32_roll_pt, procompute_expand_roll_pt, read_indices_poly,
 };
 use crate::utils::decrypt_and_print;
 use crate::{
     optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,
 };
+use crate::{BUCKET_SIZE, GAMMA, MESSAGE_BYTES};
 use bfv::{
     BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyType,
     RelinearizationKey, Representation, SecretKey,
@@ -16,8 +17,32 @@ use ndarray::{s, Array2};
 use rand_chacha::rand_core::le;
 use rayon::prelude::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
-use std::{collections::HashMap, sync::Arc, time::Instant};
 
+pub fn phase2_precomputes(
+    evaluator: &Evaluator,
+    degree: usize,
+    level: usize,
+) -> (Vec<Plaintext>, Vec<Plaintext>, Vec<Plaintext>) {
+    // extract first 32
+    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator, level);
+    // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
+    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator, level);
+    // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
+    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator, level);
+
+    (pts_32, pts_4_roll, pts_1_roll)
+}
+
+/// Calculates and returns dot product of cts and polys.
+///
+/// res0 += cts[i].c0 * poly
+/// res1 += cts[i].c1 * poly
+///
+/// Assumes that each qi in moduli chain is <= 50 bits. Leverages this to
+/// replace modulur vec multiplication with simply vector multiplication
+/// and delays modular reduction until end.
+///
+/// Returns result without modulur reduction.
 pub fn fma_poly(
     ek: &EvaluationKey,
     evaluator: &Evaluator,
@@ -47,6 +72,7 @@ pub fn fma_poly(
     (res0, res1)
 }
 
+/// a += b
 pub fn add_u128_array(a: &mut Array2<u128>, b: &Array2<u128>) {
     izip!(a.outer_iter_mut(), b.outer_iter(),).for_each(|(mut ac, bc)| {
         izip!(ac.iter_mut(), bc.iter()).for_each(|(v0, v1)| {
@@ -55,6 +81,11 @@ pub fn add_u128_array(a: &mut Array2<u128>, b: &Array2<u128>) {
     });
 }
 
+/// A single set of 32 lanes is expanded into 32 ciphertexts where each lane in new ciphertext at index i is equal to corresponding lane at index i in
+/// original ciphertext.
+///
+/// pv_ct is expanded in set of 32 lanes. Hence each set outputs 32 ciphertext. For a batch of size `batch_size` function returns
+/// `32*batch_size` ciphertexts.
 pub fn pv_expand_batch(
     ek: &EvaluationKey,
     evaluator: &Evaluator,
@@ -83,13 +114,13 @@ pub fn pv_expand_batch(
         let tmp = evaluator.rotate(&r32_ct, 2 * degree - 1, ek);
         evaluator.add_assign(&mut r32_ct, &tmp);
 
-        // extract first 4
+        // extract sets of 4
         let mut fours = vec![];
         for i in 0..8 {
             fours.push(evaluator.mul_poly(&r32_ct, pts_4_roll[i].poly_ntt_ref()));
         }
 
-        // expand fours
+        // expand each set of 4 across all lanes
         let mut i = 4;
         while i < 32 {
             for j in 0..8 {
@@ -108,7 +139,7 @@ pub fn pv_expand_batch(
             }
         }
 
-        // expand ones
+        // expand ones across all lanes
         let mut i = 1;
         while i < 4 {
             for j in (batch_index * 32)..(batch_index + 1) * 32 {
@@ -131,7 +162,8 @@ pub fn pv_expand_batch(
     ones
 }
 
-/// Processes a batch of 32 slots
+/// Expands the batch of lanes in pv_ct into individual ciphertexts. Then multiplies each ciphertext with corresponding
+/// index plaintext and weight plaintext and then adds all products into 2 ciphertexts, 1 for indices and 1 for weights.
 pub fn process_pv_batch(
     evaluator: &Evaluator,
     ek: &EvaluationKey,
@@ -139,11 +171,14 @@ pub fn process_pv_batch(
     pts_4_roll: &[Plaintext],
     pts_1_roll: &[Plaintext],
     pts_32_batch: &[Plaintext],
-    sk: &SecretKey,
+    payloads: &[Vec<u16>],
     batch_index: usize,
     batch_size: usize,
     level: usize,
-) -> (Array2<u128>, Array2<u128>) {
+    buckets: &[Vec<u64>],
+    weights: &[Vec<u64>],
+    sk: &SecretKey,
+) -> ((Array2<u128>, Array2<u128>), (Array2<u128>, Array2<u128>)) {
     println!("Processing batch {batch_index} with size {batch_size}");
 
     // expand batch cts
@@ -162,32 +197,59 @@ pub fn process_pv_batch(
     let start = batch_index * 32 * batch_size;
     let end = start + batch_size * 32;
     println!("Reading indices poly for range {start} to {end}...");
+    // Note that indices_poly current computes the poly at runtime. However these polynomials do not change
+    // across multiple runs. Hence can be pre-computed at stored, replacing expensive NTTs with read operations.
     let indices_poly = read_indices_poly(evaluator, level, start, end);
+
+    // Like indices_poly weight_polys can also be pre-computed and stored but with few caveats.
+    // 1. Pre-computation is limited to each batch. That means for every new batch of 32768 messages we require
+    // new set of weight_polys. This is because same `seed` used for assigning each index to different buckets
+    // cannot be used across different batches. Otherwise, the notion that message board is contructed randomly
+    // will be violated since the server will have to make the seed public for previous batch and an attacker
+    // can send messages to message board such that system of linear equations are unsolvable.
+    // 2. Since pre-computation is limited to batch of 32768, it means we cannot process phase2 across multiple
+    // batches. I think any practical deployment of OMR will require separating pahse 1 and phase 2 and allowing
+    // users to request messages in a dynamic range. For example, user can request message in range 60,000 and 100,000.
+    // Hence, at least in any real life scenario pre-compting weight_polys will be useless.
+    let weights_poly = compute_weight_pts(
+        evaluator,
+        level,
+        payloads,
+        start,
+        end,
+        BUCKET_SIZE,
+        buckets,
+        weights,
+        GAMMA,
+    );
+
     println!(
         "Read indices poly of len {} from {start} to {end}...",
         indices_poly.len()
     );
 
-    fma_poly(ek, evaluator, &expanded_cts, &indices_poly, sk, level)
+    let indices_res = fma_poly(ek, evaluator, &expanded_cts, &indices_poly, sk, level);
+    let weights_res = fma_poly(ek, evaluator, &expanded_cts, &weights_poly, sk, level);
+
+    (indices_res, weights_res)
 }
 
 pub fn phase2(
     evaluator: &Evaluator,
     pv_ct: &Ciphertext,
     ek: &EvaluationKey,
-    sk: &SecretKey,
     level: usize,
+    pts_32: &[Plaintext],
+    pts_4_roll: &[Plaintext],
+    pts_1_roll: &[Plaintext],
+    payloads: &[Vec<u16>],
+    buckets: &[Vec<u64>],
+    weights: &[Vec<u64>],
+    sk: &SecretKey,
 ) -> Ciphertext {
     let ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
     let degree = ctx.degree();
     let moduli_count = ctx.moduli_count();
-
-    // extract first 32
-    let pts_32 = precompute_expand_32_roll_pt(degree, evaluator, level);
-    // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-    let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, evaluator, level);
-    // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-    let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, evaluator, level);
 
     // let mut rot_count = 0;
     dbg!(rayon::current_num_threads());
@@ -204,51 +266,55 @@ pub fn phase2(
         .map(|(batch_index, pts_32_batch)| {
             let now = std::time::Instant::now();
 
-            let tmp = process_pv_batch(
+            let res = process_pv_batch(
                 evaluator,
                 ek,
                 pv_ct,
                 &pts_4_roll,
                 &pts_1_roll,
                 pts_32_batch,
-                sk,
+                payloads,
                 batch_index,
                 batch_size,
                 level,
+                buckets,
+                weights,
+                sk,
             );
 
             println!("Batch {batch_index} time: {:?}", now.elapsed());
 
-            tmp
+            res
         })
         .collect_into_vec(&mut result);
 
     // TODO: remove clones
-    let mut first0 = result.first().unwrap().0.clone();
-    let mut first1 = result.first().unwrap().1.clone();
-    result.iter().skip(1).for_each(|tup| {
-        add_u128_array(&mut first0, &tup.0);
-        add_u128_array(&mut first1, &tup.1);
-    });
-    let res = coefficient_u128_to_ciphertext(evaluator.params(), &first0, &first1, level);
+    // let mut first0 = result.first().unwrap().0.clone();
+    // let mut first1 = result.first().unwrap().1.clone();
+    // // result.iter().skip(1).for_each(|tup| {
+    // //     add_u128_array(&mut first0, &tup.0);
+    // //     add_u128_array(&mut first1, &tup.1);
+    // // });
+    // let res = coefficient_u128_to_ciphertext(evaluator.params(), &first0, &first1, level);
 
-    println!("Phase 2 Time: {:?}", now.elapsed());
-    // println!("Rot count: {rot_count}");
-    res
+    // println!("Phase 2 Time: {:?}", now.elapsed());
+    // // println!("Rot count: {rot_count}");
+    // res
+    todo!()
     // expand 32 into
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{ascii::escape_default, f32::consts::E};
 
     use super::*;
     use crate::{
         client::gen_pv_exapnd_rtgs,
         optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
         plaintext::powers_of_x_modulus,
-        preprocessing::precompute_indices_pts,
-        utils::precompute_range_constants,
+        preprocessing::{assign_buckets_and_weights, precompute_indices_pts},
+        utils::{generate_random_payloads, precompute_range_constants},
+        K,
     };
     use bfv::{BfvParameters, Encoding};
     use rand::thread_rng;
@@ -277,7 +343,32 @@ mod tests {
 
         // Generator rotation keys
         let mut ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
-        let res = phase2(&evaluator, &ct, &ek, &sk, level);
+
+        // pre-computes
+        let (pts_32_batch, pts_1_roll, pts_4_roll) =
+            phase2_precomputes(&evaluator, evaluator.params().degree, level);
+        let (_, buckets, weights) = assign_buckets_and_weights(
+            K * 2,
+            GAMMA,
+            evaluator.params().plaintext_modulus,
+            evaluator.params().degree,
+            &mut rng,
+        );
+        let payloads = generate_random_payloads(evaluator.params().degree);
+
+        let res = phase2(
+            &evaluator,
+            &ct,
+            &ek,
+            level,
+            &pts_32_batch,
+            &pts_4_roll,
+            &pts_1_roll,
+            &payloads,
+            &buckets,
+            &weights,
+            &sk,
+        );
 
         dbg!(evaluator.measure_noise(&sk, &res));
     }
@@ -354,27 +445,27 @@ mod tests {
             .map(|i| pts_32[i].clone())
             .collect_vec();
 
-        let now = std::time::Instant::now();
-        let (indices_res0, indices_res1) = process_pv_batch(
-            &evaluator,
-            &ek,
-            &ct,
-            &pts_4_roll,
-            &pts_1_roll,
-            &pts_32_batch,
-            &sk,
-            batc_index,
-            batch_size,
-            level,
-        );
-        println!("Time: {:?}", now.elapsed());
+        // let now = std::time::Instant::now();
+        // let (indices_res0, indices_res1) = process_pv_batch(
+        //     &evaluator,
+        //     &ek,
+        //     &ct,
+        //     &pts_4_roll,
+        //     &pts_1_roll,
+        //     &pts_32_batch,
+        //     &sk,
+        //     batc_index,
+        //     batch_size,
+        //     level,
+        // );
+        // println!("Time: {:?}", now.elapsed());
 
-        // TODO test FMA of indices and weights
-        let indices_ct =
-            coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, level);
-        // let c0 = ;
+        // // TODO test FMA of indices and weights
+        // let indices_ct =
+        //     coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, level);
+        // // let c0 = ;
 
-        dbg!(evaluator.measure_noise(&sk, &indices_ct));
+        // dbg!(evaluator.measure_noise(&sk, &indices_ct));
     }
 
     #[test]
@@ -413,5 +504,9 @@ mod tests {
         }
 
         println!("Rot count: {rot_count}");
+    }
+
+    fn reverse() { 
+        
     }
 }

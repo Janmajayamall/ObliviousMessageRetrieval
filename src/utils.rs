@@ -5,8 +5,10 @@ use bfv::{
 use byteorder::{ByteOrder, LittleEndian};
 use itertools::Itertools;
 use ndarray::Array2;
-use rand::thread_rng;
+use rand::{distributions::Standard, thread_rng, Rng};
 use std::io::Write;
+
+use crate::MESSAGE_BYTES;
 
 pub fn read_range_coeffs() -> Vec<u64> {
     let bytes = include_bytes!("../target/params_850.bin");
@@ -54,6 +56,20 @@ pub fn precompute_range_constants(ctx: &PolyContext<'_>) -> Array2<u64> {
         .collect_vec();
 
     Array2::from_shape_vec((65536usize, ctx.moduli_count()), v).unwrap()
+}
+
+pub fn generate_random_payloads(set_size: usize) -> Vec<Vec<u16>> {
+    let rng = thread_rng();
+    let mut payloads = Vec::with_capacity(set_size);
+    (0..set_size).into_iter().for_each(|_| {
+        let msg: Vec<u16> = rng
+            .clone()
+            .sample_iter(Standard)
+            .take(MESSAGE_BYTES / 2)
+            .collect_vec();
+        payloads.push(msg);
+    });
+    payloads
 }
 
 pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &SecretKey, tag: &str) {
