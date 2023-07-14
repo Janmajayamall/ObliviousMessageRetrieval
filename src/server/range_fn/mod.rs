@@ -22,7 +22,7 @@ fn ciphertext_square_and_relin(
 /// Helper function to equally distribute 255 m loop iterations between available threads.
 /// Functions starts with range [1, 256) recursively divides the range in half until the distance
 /// of range is <= set_len, after which processes loop iterations in the range.
-/// set_len is equal to `ceil(255/no_of_threads)`. Thus it `set_len` defines appropriate number of iterations
+/// set_len is equal to `ceil(255/no_of_threads)`. Thus `set_len` defines appropriate number of iterations
 /// that must be assigned to each thread.
 fn process_m_loop(
     evaluator: &Evaluator,
@@ -66,7 +66,7 @@ fn process_m_loop(
             // It's ok to index by `i - 1` here since `start` is never 0
             let product = evaluator.mul_lazy(&res_ct, &m_powers[i - 1]);
 
-            // Don't add in first iteration when i == start since sum is empty
+            // Don't add in first iteration, that is when i == start, since sum is empty
             if i == start {
                 sum = product;
             } else {
@@ -109,9 +109,9 @@ pub fn range_fn(
     // Calculate base powers for k_powers. There's no harm in doing this here since
     // evaluate_powers calculates base powers serially as well.
     // The intention with doing this here is to evaluate k_powers and m_powers in parallel using `join`.
-    // calculate only even powers in range [1,256]
+    // Calculate only even powers in range [1,256]
     let mut k_powers = vec![placeholder.clone(); 128];
-    // calcuate x^2 separately to make code look simpler
+    // calcuate x^2 separately to simplify the code
     k_powers[0] = ciphertext_square_and_relin(evaluator, ek, ct);
     for base in [4, 8, 16, 32, 64, 128, 256] {
         k_powers[(base >> 1) - 1] =
@@ -122,12 +122,12 @@ pub fn range_fn(
     let mut m_powers = vec![placeholder.clone(); 255];
     // since m^1 = x^256, set k[127] at index 0.
     // Although m_powers[0] is equal to k_powers[127] it is neccessary to have two separate copies since we require the same ciphertext
-    // into different representations. k_powers[127] must be in `Evaluation` for efficient plaintext multiplication in inner loop and m_powers[0] must
-    // `Coefficient` for efficient evaluation of powers and outer loop muliplication corresponding to second iteration.
+    // in different representations. k_powers[127] must be in `Evaluation` representation for efficient plaintext multiplication in inner loop
+    //  and m_powers[0] must `Coefficient` representation for efficient evaluation of m_powers and outer loop muliplication in second m loop interation.
     m_powers[0] = {
-        // We cannot directly call clone, since `mod_down_next` does not free up memory allocated to dropped rows in beggining.
+        // We cannot directly call clone, since `mod_down_next` does not free up memory allocated to already dropped rows of fresh ciphertext.
         // Calling clone will clone unecessary values causing unecessary memory allocations. Instead we will have to call
-        // `to_owned` on coefficient arrays owned by polynomials inside ciphertext ourselves, to make sure no additional space
+        // `to_owned` on coefficient arrays owned by polynomials inside ciphertext, to make sure no additional space
         // is occupied by not in use rows.
         let c_vec = k_powers[127]
             .c_ref()
@@ -144,8 +144,8 @@ pub fn range_fn(
     rayon::join(
         || {
             // For k_powers we only need to calculate even powers in the range [1,256]. Recall that
-            // all even numbers in a given range can be written by multiplying all numbers in half of the range.
-            // For example, all even numbers in range [1,256] can be obtained by multipying all values in
+            // all even numbers in a given range can be obtained by multiplying 2 by all numbers in half of the range.
+            // For example, all even numbers in range [1,256] can be obtained by multiplying all values in
             // range [1,128] by 2. Thus to calculate only even powers in range [0, 256] we calculate all powers
             // of `a` in range [1,128] where `a=x^2`.
             evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, cores);
@@ -198,12 +198,12 @@ pub fn range_fn(
                 level,
             );
 
-            // change representation to Coefficient to stay consistent with output of rest of the k loops
+            // change representation to Coefficient to stay consistent with output of rest of the m loops
             evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
             res_ct
         };
 
-        // process_m_loop processes m_th loop for values in range [start, end)
+        // process_m_loop processes m^th loop for values in range [start, end)
         let mut sum_ct = process_m_loop(
             evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
         );

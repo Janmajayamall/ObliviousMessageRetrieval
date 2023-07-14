@@ -19,7 +19,7 @@ use omr::{
     preprocessing::pre_process_batch,
     pvw::*,
     server::{
-        phase2,
+        mul_and_reduce_ranged_cts_to_1, phase2,
         powers_x::evaluate_powers,
         pvw_decrypt::{pvw_decrypt, pvw_decrypt_precomputed, pvw_setup},
         range_fn::{range_fn, range_fn_4_times},
@@ -85,26 +85,7 @@ fn phase1() {
         &sk,
     );
 
-    // multiplication tree
-    // ct[0] * ct[1]          ct[2] * ct[4]
-    //      v0         *          v1
-    //                v
-    let v0 = evaluator.mul(&ranged_cts.0 .0, &ranged_cts.0 .1);
-    let v0 = evaluator.relinearize(&v0, &ek);
-    let v1 = evaluator.mul(&ranged_cts.1 .0, &ranged_cts.1 .1);
-    let v1 = evaluator.relinearize(&v1, &ek);
-
-    println!("v0 noise: {}", evaluator.measure_noise(&sk, &v0));
-    println!("v1 noise: {}", evaluator.measure_noise(&sk, &v1));
-
-    let v = evaluator.mul(&v0, &v1);
-    // Relinearization of `v` can be modified such that overall ntts can be minized.
-    // We expect `v` to be in evaluation form. Thus we convert c0 and c1, not c2, to evaluation form
-    // after scale_and_round op. key_switch `c2` (c2 stays in coeffciient form). The c0' and
-    // c1' (key switch outputs in evaluation form) to c0 and c1 respectively. Instead if we
-    // use normal `relinearize` the output will be in coefficient form and will have to pay
-    // for additional 2 Ntts of size Q to convert ouput to evaluation.
-    let mut v = evaluator.relinearize(&v, &ek);
+    let mut v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
 
     println!("phase 1 end ct noise: {}", evaluator.measure_noise(&sk, &v));
 

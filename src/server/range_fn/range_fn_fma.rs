@@ -11,9 +11,8 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
-use std::{collections::HashMap, sync::Arc, time::Instant};
 
-/// r0 += a0 * s
+/// Performs FMA: r0 += a0 * s
 pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
     let s_u128 = s as u128;
     r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
@@ -21,8 +20,11 @@ pub fn scalar_mul_u128(r: &mut [u128], a: &[u64], s: u64) {
     })
 }
 
-/// `mul_poly_scalar_u128` calls `scalar_mul_u128` moduli count times. Hence,
-/// cost of `mul_poly_scalar_u128` must be `moduli_count * Cost(scalar_mul_u128)`
+/// Performs res[i] += a[i] * scalar[i] where i is index of qi in moduli chain, res is
+/// unreduced coefficients corresponding to qi modulus stored in row major form, a[i] are reduced coefficients
+/// corresponding to qi modulus stored in row major form, scalar[i] is i^th scalar in scalar_slice.
+///
+/// Functions calls `scalar_mul_u128` equivalent to moduli count times.
 pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u64]) {
     izip!(
         res.outer_iter_mut(),
@@ -34,11 +36,13 @@ pub fn mul_poly_scalar_u128(res: &mut Array2<u128>, a: &Poly, scalar_slice: &[u6
     });
 }
 
-/// `optimised_range_fn_fma_u128` calls `mul_poly_scalar_u128` 128 * 2 (ie 256) times. Additionally,
-/// inside `coefficient_u128_to_ciphertext` it calls `barret_reduction_u128_vec` `moduli_count*2` times.
+/// Performs inner k loop of range function. More specifically, function calculates res += single_powers[i] * constants[i]
+/// where single_powers[i] is i^th k_power and constants[i] is corresponding constant reduced with respect to moduli chain.
 ///
-/// Hence the cost of `optimised_range_fn_fma_u128` must be
-/// moduli_count * Cost(scalar_mul_u128) * 256 + moduli_count * 2 * Cost(barret_reduction_u128_vec)
+/// Function assumes that each qi in moduli chain is <= 50 bits hence modulus reduction can be delayed until last
+/// scalar multiplication. Hence modulus vector multiplication and additions are replace with normal vector multiplications, additions.
+///
+/// In concrete costs, functions call `mul_poly_scalar_u128` * 128 * 2 times.
 pub fn optimised_range_fn_fma_u128(
     poly_ctx: &PolyContext<'_>,
     params: &BfvParameters,
@@ -73,9 +77,14 @@ pub fn optimised_range_fn_fma_u128(
 }
 
 #[cfg(target_arch = "x86_64")]
-/// `mul_poly_scalar_slice_hexl` calls `hexl_rs::elwise_mult_scalar_mod_2` moduli_count times. Hence, its cost must
-/// be:
-/// `moduli_count` * Cost(hexl_rs::elwise_mult_scalar_mod_2)
+/// Performs res[i] = a[i] * scalar[i] where i is index of qi in moduli chain, resulting `res` are
+/// reduced coefficients corresponding to qi modulus stored in row major form, a[i] are reduced coefficients
+/// corresponding to qi modulus stored in row major form, scalar[i] is i^th scalar in scalar_slice.
+///
+/// Use `fma_poly_scale_slice_hexl` over `fma_poly_scale_slice_u128` on x86 since it performs better
+/// assuming that each qi in moduli chain is <=50 bit (ie when hexl uses IFMA instruction set)
+///
+/// Calls `hexl_rs::elwise_fma_mod` moduli count times.
 pub fn mul_poly_scalar_slice_hexl(
     poly_ctx: &PolyContext<'_>,
     res: &mut Poly,
@@ -101,9 +110,14 @@ pub fn mul_poly_scalar_slice_hexl(
     });
 }
 
-/// `fma_poly_scale_slice_hexl` calls `hexl_rs::elwise_fma_mod` moduli_count times. Hence, its cost must
-/// be:
-/// `moduli_count` * Cost(hexl_rs::elwise_fma_mod)
+/// Performs res[i] += a[i] * scalar[i] where i is index of qi in moduli chain, res are
+/// reduced coefficients corresponding to qi modulus stored in row major form, a[i] are reduced coefficients
+/// corresponding to qi modulus stored in row major form, scalar[i] is i^th scalar in scalar_slice.
+///
+/// Use `fma_poly_scale_slice_hexl` over `fma_poly_scale_slice_u128` on x86 since it performs better
+/// assuming that each qi in moduli chain is <=50 bit (ie when hexl uses IFMA instruction set)
+///
+/// Calls `hexl_rs::elwise_fma_mod` moduli count times.
 #[cfg(target_arch = "x86_64")]
 pub fn fma_poly_scale_slice_hexl(
     poly_ctx: &PolyContext<'_>,
@@ -130,15 +144,14 @@ pub fn fma_poly_scale_slice_hexl(
     });
 }
 
-/// `optimised_range_fn_fma_hexl` calls `mul_poly_scalar_slice_hexl` 2 times and `fma_poly_scale_slice_hexl` 127 times.
-/// Hence, its cost must be
-/// mul_poly_scalar_slice_hexl * 2 + fma_poly_scale_slice_hexl * 2 * 127.
+/// Performs inner k loop of range function. More specifically, function calculates res += single_powers[i] * constants[i]
+/// where single_powers[i] is i^th k_power and constants[i] is corresponding constant reduced with respect to moduli chain.
 ///
-/// If we assume that cost of `hexl_rs::elwise_mult_scalar_mod_2` and `hexl_rs::elwise_fma_mod` as more or less equal, then the cost
-/// of `optimised_range_fn_fma_hexl` can be estimated as
-/// let hexl_cost = max( `hexl_rs::elwise_mult_scalar_mod_2` , `hexl_rs::elwise_fma_mod`)
-/// Cost(optimised_range_fn_fma_hexl) = hexl_cost * moduli_count * 2 + hexl_cost * moduli_count * 2 * 127
-/// = (hexl_cost * moduli_count * 2) * 128 = hexl_cost * moduli_count * 256
+/// Use this function over `optimised_range_fn_fma_u128` on x86 if each qi in moduli chain is <= 50 bites since it performs
+/// better by using hexl_rs APIs for scalar multplication and fused multiplication and addition.
+///
+/// In concrete costs, functions call `mul_poly_scalar_slice_hexl` 2 times and fma_poly_scale_slice_hexl 127 * 2 times. In general
+/// costs of `fma_poly_scale_slice_hexl` and `mul_poly_scalar_slice_hexl` can be assumed to be same.
 #[cfg(target_arch = "x86_64")]
 pub fn optimised_range_fn_fma_hexl(
     poly_ctx: &PolyContext<'_>,
@@ -147,7 +160,7 @@ pub fn optimised_range_fn_fma_hexl(
     constants_outer_offset: usize,
     level: usize,
 ) -> Ciphertext {
-    // process the first index using scalar mod instead of fma
+    // process the first index using scalar mod instead of fma, since sum_ct is uinitialised
     let mut sum_ct = {
         let scalar_slice = constants.slice(s![constants_outer_offset + 1, ..]);
 

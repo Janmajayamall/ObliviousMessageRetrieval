@@ -6,7 +6,7 @@ use rayon::prelude::{IndexedParallelIterator, IntoParallelRefMutIterator, Parall
 
 /// Calculates all powers of `x` for range [1,256) using binary exponentiation
 ///
-/// Note: not used anywhere. Just for testing.
+/// Note: not used anywhere. Here just for testing.
 pub fn powers_of_x_ct(
     x: &Ciphertext,
     evaluator: &Evaluator,
@@ -61,12 +61,13 @@ pub fn powers_of_x_ct(
 
 /// Calcultes power of x for range [start, end) in parallel. Assumes that all
 /// powers in range [0, start) are pre-calculated and stored in `calculated`.
+/// Assumes that `start` and `end=start*2` are power of 2.
 ///
 /// Set `bases` to true if `base` power for the range has already calculated and
 /// stored in `calculated`.
 ///
-/// If base is not calculated, the performs end-start+1 ciphertext multiplications.
-/// Otherwise performs end-start ciphertext multiplications.
+/// If base is not calculated, then function performs end-start ciphertext multiplications.
+/// Otherwise performs end-start-1 ciphertext multiplications.
 ///
 /// To understand the function, consider the base power as `x^start`. We assume that
 /// `start` is always a power of 2. All values in range [start, end) can be calculated
@@ -91,7 +92,7 @@ pub fn evaluate_powers(
         calculated[start - 1] = evaluator.relinearize(&tmp, ek);
     }
 
-    // To avoid running to borrow issues later, split `calculated` at `start+1` where the second chunk will
+    // To avoid running into borrow issues later, split `calculated` at `start+1` where the second chunk will
     // be mutated
     let (done, pending) = calculated.split_at_mut(start - 1 + 1);
 

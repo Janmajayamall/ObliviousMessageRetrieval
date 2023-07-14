@@ -8,7 +8,7 @@ pub fn pre_process_batch(
     hints: &[PvwCiphertext],
 ) -> (Vec<Plaintext>, Vec<Poly>) {
     // can only process as many as polynomial_degree hints in a batch
-    debug_assert!(hints.len() <= evaluator.params().degree);
+    assert!(hints.len() <= evaluator.params().degree);
 
     let sec_len = pvw_params.n.next_power_of_two();
     let mut hint_a_pts = vec![];

@@ -19,8 +19,8 @@ use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIter
 use rayon::slice::ParallelSliceMut;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-// TODO: add multithreading for PVW
-
+/// Pre-compute rotations of `sk_cts`s such that pvw_decrypt can leverage cores of the system
+/// as much as possible.
 pub fn pvw_setup(
     evaluator: &Evaluator,
     ek: &EvaluationKey,
@@ -31,11 +31,11 @@ pub fn pvw_setup(
     // pvw decrypt is called 4 times with different ciphertexts. Thus, we first assign total no. of threads
     // equally among all 4 calls before dividing them further for rotations within each call.
     let threads_by_4 = threads as f64 / 4.0;
-    // We need to distribute the task of 512 rotations among all available threads equally. For ex, if threads_by_4 = 8
+    // We need to distribute the task of 512 rotations among all threads available to a single pvw_decrypt call equally. For ex, if threads_by_4 = 8
     // then each thread will perform `512/8=64` rotations. However, rotations will be distributed unequally if 512%threads_by_4 != 0
-    // and the time will be set of the last thread to which maximum number of rotations are allocated. For ex, if thread_by_4 = 11.
-    // Since 512%11 != 0, 10 threads will be allocated 45 rotations whereas the last thread will have to do 512-(10*45) = 62 rotations,
-    // thus defining the time taken.
+    // and the time will be set by the last thread to which maximum number of rotations are allocated. For ex, let thread_by_4 = 11.
+    // Since 512%11 != 0, 10 threads will be allocated 46 rotations whereas the last thread will have to do 512-(10*46) = 52 rotations,
+    // thus defining the total time taken.
     let rots_per_thread = (512.0 / threads_by_4).floor() as usize;
 
     dbg!(threads_by_4);
@@ -44,7 +44,7 @@ pub fn pvw_setup(
     let mut checkpoint_cts = vec![vec![]; 4];
     let mut cts = pvw_sk_cts.to_vec();
     for j in 0..threads_by_4 as usize {
-        // Checkpoints for each thread are cts rotated by thread_index*rots_per_thread.
+        // Checkpoints for each thread are cts rotated by j*rots_per_thread.
         for i in 0..4 {
             checkpoint_cts[i].push(cts[i].clone());
         }
@@ -140,7 +140,6 @@ pub fn pvw_decrypt(
         .collect_into_vec(&mut sk_a);
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
-        // FIXME: Wo don't need this
         evaluator.sub_ciphertext_from_poly_inplace(sa, b);
     });
 
@@ -159,7 +158,7 @@ fn add_array_u128(a: &mut Array2<u128>, b: &Array2<u128>) {
 ///
 /// Recursively calls itself until it narrows down to a single start index. After which it calls
 /// `optimised_pvw_fma_with_rot` for sk_ct with correspoding slice of hint_a_pts. Correspondence is
-/// determined by the index of sk_ct, which infact means the number of times it has been rotated. For ex,
+/// determined by the index of sk_ct, which infact means the number of times it has been rotated during pre-computation. For ex,
 /// the sk_ct at position 1 must be matched with slice chunk of hint_a_pts offset by `rots_per_thread*1` since
 /// first `rots_per_thread` pts are for sk_ct at position 0.
 ///
@@ -210,8 +209,8 @@ pub fn pvw_decrypt_precomputed(
 
     let threads = rayon::current_num_threads();
     let threads_by_4 = threads / 4;
-    // Validate that number of checkpoints are euqally disbuted among all threads_by_4.
-    // This means percomputed rotations of sk_ct must be equal to threads_by_4.
+    // Validate that number of checkpoints are equals disbuted among all threads_by_4.
+    // This means precomputed rotations of sk_ct must be equal to threads_by_4.
     assert!(precomputed_pvw_sk_cts[0].len() == threads_by_4);
     assert!(precomputed_pvw_sk_cts[1].len() == threads_by_4);
     assert!(precomputed_pvw_sk_cts[2].len() == threads_by_4);
@@ -243,7 +242,7 @@ pub fn pvw_decrypt_precomputed(
         .collect_into_vec(&mut sk_a);
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
-        // FIXME: Wo don't need this
+        // b - s0
         evaluator.sub_ciphertext_from_poly_inplace(sa, b);
     });
 
