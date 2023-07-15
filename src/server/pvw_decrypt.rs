@@ -19,8 +19,7 @@ use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIter
 use rayon::slice::ParallelSliceMut;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
-/// Pre-compute rotations of `sk_cts`s such that pvw_decrypt can leverage cores of the system
-/// as much as possible.
+/// Pre-compute rotations of `sk_cts`s such that pvw_decrypt can leverage all avaialble cores.
 pub fn pvw_setup(
     evaluator: &Evaluator,
     ek: &EvaluationKey,

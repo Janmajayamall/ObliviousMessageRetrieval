@@ -28,6 +28,7 @@ hexl-rs = {path="./../hexl-rs"}
 [features]
 lvl = []
 noise = []
+precomp_pvw = []
 
 
 [dev-dependencies]

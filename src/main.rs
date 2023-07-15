@@ -16,16 +16,18 @@ use std::{
 use omr::{
     client::{encrypt_pvw_sk, gen_pv_exapnd_rtgs},
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
-    preprocessing::pre_process_batch,
+    preprocessing::{assign_buckets_and_weights, pre_process_batch},
     pvw::*,
     server::{
-        mul_and_reduce_ranged_cts_to_1, phase2,
+        mul_and_reduce_ranged_cts_to_1,
+        phase2::{self, phase2_precomputes},
         powers_x::evaluate_powers,
         pvw_decrypt::{pvw_decrypt, pvw_decrypt_precomputed, pvw_setup},
         range_fn::{range_fn, range_fn_4_times},
     },
     time_it,
-    utils::precompute_range_constants,
+    utils::{generate_random_payloads, precompute_range_constants},
+    GAMMA, K,
 };
 
 fn phase1() {
@@ -56,7 +58,26 @@ fn phase1() {
     println!("Generating keys");
     let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
 
+    #[cfg(feature = "precomp_pvw")]
+    // pre compute pvw_sk_cts rotations for maximum core usage
+    let precomputed_pvw_sk_cts = pvw_setup(&evaluator, &ek, &pvw_sk_cts);
+
     println!("Running Pvw decrypt...");
+
+    #[cfg(feature = "precomp_pvw")]
+    let decrypted_cts = {
+        pvw_decrypt_precomputed(
+            &pvw_params,
+            &evaluator,
+            &hint_a,
+            &hint_b,
+            &precomputed_pvw_sk_cts,
+            ek.get_rtg_ref(1, 0),
+            &sk,
+        )
+    };
+
+    #[cfg(not(feature = "precomp_pvw"))]
     let decrypted_cts = pvw_decrypt(
         &pvw_params,
         &evaluator,
@@ -88,18 +109,57 @@ fn phase1() {
     let mut v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
 
     println!("phase 1 end ct noise: {}", evaluator.measure_noise(&sk, &v));
-
-    evaluator.ciphertext_change_representation(&mut v, Representation::Evaluation);
     phase2(&evaluator, &sk, &mut v);
 }
 
 fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &mut Ciphertext) {
-    evaluator.mod_down_level(pv, 12);
-    dbg!(pv.level());
-    let ek = gen_pv_exapnd_rtgs(evaluator.params(), sk, 12);
-    // phase2::phase2(evaluator, pv, &ek, sk, 12);
+    let mut rng = thread_rng();
 
-    // println!("Phase 2 end noise: {}", evaluator.measure_noise(sk, pv));
+    // generate evaluation key for phase 2
+    let ek = gen_pv_exapnd_rtgs(evaluator.params(), sk, 12);
+
+    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
+    evaluator.mod_down_level(pv, 12);
+
+    // switch to Evaluation representation for efficient rotations and scalar multiplications
+    evaluator.ciphertext_change_representation(pv, Representation::Evaluation);
+
+    let degree = evaluator.params().degree;
+    let level = 12;
+
+    // phase 2 precomputes
+    let (pts_32_batch, pts_4_roll, pts_1_roll) = phase2_precomputes(evaluator, degree, level);
+    let (_, buckets, weights) = assign_buckets_and_weights(
+        K * 2,
+        GAMMA,
+        evaluator.params().plaintext_modulus,
+        evaluator.params().degree,
+        &mut rng,
+    );
+    let payloads = generate_random_payloads(evaluator.params().degree);
+
+    let (indices_ct, weights_ct) = phase2::phase2(
+        evaluator,
+        pv,
+        &ek,
+        level,
+        &pts_32_batch,
+        &pts_4_roll,
+        &pts_1_roll,
+        &payloads,
+        &buckets,
+        &weights,
+        sk,
+    );
+
+    println!(
+        "Indices Ct noise: {}",
+        evaluator.measure_noise(sk, &indices_ct)
+    );
+    println!(
+        "Weight Ct noise: {}",
+        evaluator.measure_noise(sk, &weights_ct)
+    );
 }
 
 fn powers_of_x() {
@@ -243,7 +303,7 @@ fn main() {
         .unwrap();
 
     // call_pvw_decrypt();
-    call_pvw_decrypt_precomputed();
+    // call_pvw_decrypt_precomputed();
 
     // powers_of_x();
     // call_range_fn_once();

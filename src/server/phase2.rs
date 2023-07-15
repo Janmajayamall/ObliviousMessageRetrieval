@@ -1,3 +1,5 @@
+use std::f32::consts::E;
+
 use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{
     compute_weight_pts, precompute_expand_32_roll_pt, procompute_expand_roll_pt, read_indices_poly,
@@ -14,6 +16,7 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::{s, Array2};
+use num_traits::ToPrimitive;
 use rand_chacha::rand_core::le;
 use rayon::prelude::{IndexedParallelIterator, ParallelIterator};
 use rayon::slice::ParallelSlice;
@@ -172,14 +175,14 @@ pub fn process_pv_batch(
     pts_1_roll: &[Plaintext],
     pts_32_batch: &[Plaintext],
     payloads: &[Vec<u16>],
-    batch_index: usize,
-    batch_size: usize,
+    start: usize,
+    end: usize,
     level: usize,
     buckets: &[Vec<u64>],
     weights: &[Vec<u64>],
     sk: &SecretKey,
 ) -> ((Array2<u128>, Array2<u128>), (Array2<u128>, Array2<u128>)) {
-    println!("Processing batch {batch_index} with size {batch_size}");
+    println!("Processing batches: {start} - {end}");
 
     // expand batch cts
     let expanded_cts = pv_expand_batch(
@@ -192,14 +195,15 @@ pub fn process_pv_batch(
         &sk,
     );
 
-    assert!(expanded_cts.len() == batch_size * 32);
+    assert!(expanded_cts.len() == (end - start) * 32);
 
-    let start = batch_index * 32 * batch_size;
-    let end = start + batch_size * 32;
-    println!("Reading indices poly for range {start} to {end}...");
+    let start_lane = start * 32;
+    let end_lane = end * 32;
+
+    println!("Reading indices poly for lanes {start_lane} to {end_lane}...");
     // Note that indices_poly current computes the poly at runtime. However these polynomials do not change
     // across multiple runs. Hence can be pre-computed at stored, replacing expensive NTTs with read operations.
-    let indices_poly = read_indices_poly(evaluator, level, start, end);
+    let indices_poly = read_indices_poly(evaluator, level, start_lane, end_lane);
 
     // Like indices_poly weight_polys can also be pre-computed and stored but with few caveats.
     // 1. Pre-computation is limited to each batch. That means for every new batch of 32768 messages we require
@@ -207,31 +211,95 @@ pub fn process_pv_batch(
     // cannot be used across different batches. Otherwise, the notion that message board is contructed randomly
     // will be violated since the server will have to make the seed public for previous batch and an attacker
     // can send messages to message board such that system of linear equations are unsolvable.
-    // 2. Since pre-computation is limited to batch of 32768, it means we cannot process phase2 across multiple
-    // batches. I think any practical deployment of OMR will require separating pahse 1 and phase 2 and allowing
+    // 2. Since pre-computation is limited to batch of 32768 we cannot process phase2 across multiple
+    // batches. I think any practical deployment of OMR will require separating phase 1 and phase 2 and allowing
     // users to request messages in a dynamic range. For example, user can request message in range 60,000 and 100,000.
-    // Hence, at least in any real life scenario pre-compting weight_polys will be useless.
+    // Hence, at least in any real life scenario pre-computing weight_polys will be useless.
     let weights_poly = compute_weight_pts(
         evaluator,
         level,
         payloads,
-        start,
-        end,
+        start_lane,
+        end_lane,
         BUCKET_SIZE,
         buckets,
         weights,
         GAMMA,
     );
 
-    println!(
-        "Read indices poly of len {} from {start} to {end}...",
-        indices_poly.len()
-    );
-
     let indices_res = fma_poly(ek, evaluator, &expanded_cts, &indices_poly, sk, level);
     let weights_res = fma_poly(ek, evaluator, &expanded_cts, &weights_poly, sk, level);
 
     (indices_res, weights_res)
+}
+
+/// Divides pts_32 among available threads equally and calls `process_pv_batch` for each chunk (ie batch).
+///
+/// Warning: available threads must be power of 2 for maximum core usage.
+fn helper(
+    start: usize,
+    end: usize,
+    set_len: usize,
+    pts_32: &[Plaintext],
+    evaluator: &Evaluator,
+    ek: &EvaluationKey,
+    pv_ct: &Ciphertext,
+    pts_4_roll: &[Plaintext],
+    pts_1_roll: &[Plaintext],
+    payloads: &[Vec<u16>],
+    level: usize,
+    buckets: &[Vec<u64>],
+    weights: &[Vec<u64>],
+    sk: &SecretKey,
+) -> ((Array2<u128>, Array2<u128>), (Array2<u128>, Array2<u128>)) {
+    if (end - start) <= set_len {
+        let res = process_pv_batch(
+            evaluator,
+            ek,
+            pv_ct,
+            &pts_4_roll,
+            &pts_1_roll,
+            &pts_32[start..end],
+            payloads,
+            start,
+            end,
+            level,
+            buckets,
+            weights,
+            sk,
+        );
+        res
+    } else {
+        let mid = (start + end) / 2;
+        let (mut r0, r1) = rayon::join(
+            || {
+                helper(
+                    start, mid, set_len, pts_32, evaluator, ek, pv_ct, pts_4_roll, pts_1_roll,
+                    payloads, level, buckets, weights, sk,
+                )
+            },
+            || {
+                helper(
+                    mid, end, set_len, pts_32, evaluator, ek, pv_ct, pts_4_roll, pts_1_roll,
+                    payloads, level, buckets, weights, sk,
+                )
+            },
+        );
+
+        // add indices polys
+        // c0
+        add_u128_array(&mut r0.0 .0, &r1.0 .0);
+        // c1
+        add_u128_array(&mut r0.0 .1, &r1.0 .1);
+
+        // add weights polys
+        // c0
+        add_u128_array(&mut r0.1 .0, &r1.1 .0);
+        // c1
+        add_u128_array(&mut r0.1 .1, &r1.1 .1);
+
+        r0
+    }
 }
 
 pub fn phase2(
@@ -246,62 +314,51 @@ pub fn phase2(
     buckets: &[Vec<u64>],
     weights: &[Vec<u64>],
     sk: &SecretKey,
-) -> Ciphertext {
-    let ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
-    let degree = ctx.degree();
-    let moduli_count = ctx.moduli_count();
+) -> (Ciphertext, Ciphertext) {
+    // pertinency vector ciphertext must be in Evaluation representation
+    assert!(pv_ct.c_ref()[0].representation() == &Representation::Evaluation);
 
     // let mut rot_count = 0;
     dbg!(rayon::current_num_threads());
 
-    let now = std::time::Instant::now();
+    let num_threads = rayon::current_num_threads() as f64;
+    let set_len = (pts_32.len() as f64 / num_threads)
+        .ceil()
+        .to_usize()
+        .unwrap();
 
-    let num_threads = rayon::current_num_threads();
-    let batch_size = pts_32.len() / num_threads;
+    let (indices_poly_u128, weights_poly_u128) = helper(
+        0,
+        pts_32.len(),
+        set_len,
+        pts_32,
+        evaluator,
+        ek,
+        pv_ct,
+        pts_4_roll,
+        pts_1_roll,
+        payloads,
+        level,
+        buckets,
+        weights,
+        sk,
+    );
 
-    let mut result = vec![];
-    pts_32
-        .par_chunks(batch_size)
-        .enumerate()
-        .map(|(batch_index, pts_32_batch)| {
-            let now = std::time::Instant::now();
+    let indices_ct = coefficient_u128_to_ciphertext(
+        evaluator.params(),
+        &indices_poly_u128.0,
+        &indices_poly_u128.1,
+        level,
+    );
 
-            let res = process_pv_batch(
-                evaluator,
-                ek,
-                pv_ct,
-                &pts_4_roll,
-                &pts_1_roll,
-                pts_32_batch,
-                payloads,
-                batch_index,
-                batch_size,
-                level,
-                buckets,
-                weights,
-                sk,
-            );
+    let weights_ct = coefficient_u128_to_ciphertext(
+        evaluator.params(),
+        &weights_poly_u128.0,
+        &weights_poly_u128.1,
+        level,
+    );
 
-            println!("Batch {batch_index} time: {:?}", now.elapsed());
-
-            res
-        })
-        .collect_into_vec(&mut result);
-
-    // TODO: remove clones
-    // let mut first0 = result.first().unwrap().0.clone();
-    // let mut first1 = result.first().unwrap().1.clone();
-    // // result.iter().skip(1).for_each(|tup| {
-    // //     add_u128_array(&mut first0, &tup.0);
-    // //     add_u128_array(&mut first1, &tup.1);
-    // // });
-    // let res = coefficient_u128_to_ciphertext(evaluator.params(), &first0, &first1, level);
-
-    // println!("Phase 2 Time: {:?}", now.elapsed());
-    // // println!("Rot count: {rot_count}");
-    // res
-    todo!()
-    // expand 32 into
+    (indices_ct, weights_ct)
 }
 
 #[cfg(test)]
@@ -345,7 +402,7 @@ mod tests {
         let mut ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
 
         // pre-computes
-        let (pts_32_batch, pts_1_roll, pts_4_roll) =
+        let (pts_32_batch, pts_4_roll, pts_1_roll) =
             phase2_precomputes(&evaluator, evaluator.params().degree, level);
         let (_, buckets, weights) = assign_buckets_and_weights(
             K * 2,
@@ -356,7 +413,10 @@ mod tests {
         );
         let payloads = generate_random_payloads(evaluator.params().degree);
 
-        let res = phase2(
+        // restrict to single batch
+        let pts_32_batch = pts_32_batch[..4].to_vec();
+
+        let (indices_ct, weights_ct) = phase2(
             &evaluator,
             &ct,
             &ek,
@@ -370,7 +430,8 @@ mod tests {
             &sk,
         );
 
-        dbg!(evaluator.measure_noise(&sk, &res));
+        dbg!(evaluator.measure_noise(&sk, &indices_ct));
+        dbg!(evaluator.measure_noise(&sk, &weights_ct));
     }
 
     #[test]
@@ -389,20 +450,24 @@ mod tests {
         evaluator.mod_down_level(&mut ct, level);
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
-        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator, level);
-        // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator, level);
-        // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator, level);
+        let (pts_32_batch, pts_4_roll, pts_1_roll) =
+            phase2_precomputes(&evaluator, evaluator.params().degree, level);
 
         // restrict to single batch
-        let pts_32 = (0..128)
-            .into_iter()
-            .map(|i| pts_32[i].clone())
-            .collect_vec();
+        let pts_32_batch = pts_32_batch[..1].to_vec();
 
         let ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
-        let ones = pv_expand_batch(&ek, &evaluator, &pts_4_roll, &pts_1_roll, &ct, &pts_32, &sk);
+        let ones = pv_expand_batch(
+            &ek,
+            &evaluator,
+            &pts_4_roll,
+            &pts_1_roll,
+            &ct,
+            &pts_32_batch,
+            &sk,
+        );
+
+        assert!(pts_32_batch.len() * 32 == ones.len());
 
         ones.iter().for_each(|ct| {
             dbg!(evaluator.measure_noise(&sk, ct));
@@ -410,62 +475,6 @@ mod tests {
             // dbg!(&rm);
             assert!(rm == m);
         });
-    }
-
-    #[test]
-    fn test_process_pv_batch() {
-        let mut rng = thread_rng();
-        let params = BfvParameters::default(3, 1 << 15);
-        let sk = SecretKey::random(params.degree, &mut rng);
-        let degree = params.degree;
-        let m = vec![3; params.degree];
-
-        let ek = gen_pv_exapnd_rtgs(&params, &sk, 0);
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-        let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
-        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
-
-        let level = 0;
-
-        let pts_32 = precompute_expand_32_roll_pt(degree, &evaluator, level);
-        // pt_4_roll must be 2d vector that extracts 1st 4, 2nd 4, 3rd 4, and 4th 4.
-        let pts_4_roll = procompute_expand_roll_pt(32, 4, degree, &evaluator, level);
-        // pt_1_roll must be 2d vector that extracts 1st 1, 2nd 1, 3rd 1, and 4th 1.
-        let pts_1_roll = procompute_expand_roll_pt(4, 1, degree, &evaluator, level);
-
-        let level = 0;
-
-        // restrict to single batch
-        let batch_size = 1;
-        let batc_index = 0;
-        let pts_32_batch = (0..batch_size)
-            .into_iter()
-            .map(|i| pts_32[i].clone())
-            .collect_vec();
-
-        // let now = std::time::Instant::now();
-        // let (indices_res0, indices_res1) = process_pv_batch(
-        //     &evaluator,
-        //     &ek,
-        //     &ct,
-        //     &pts_4_roll,
-        //     &pts_1_roll,
-        //     &pts_32_batch,
-        //     &sk,
-        //     batc_index,
-        //     batch_size,
-        //     level,
-        // );
-        // println!("Time: {:?}", now.elapsed());
-
-        // // TODO test FMA of indices and weights
-        // let indices_ct =
-        //     coefficient_u128_to_ciphertext(evaluator.params(), &indices_res0, &indices_res1, level);
-        // // let c0 = ;
-
-        // dbg!(evaluator.measure_noise(&sk, &indices_ct));
     }
 
     #[test]
@@ -506,7 +515,5 @@ mod tests {
         println!("Rot count: {rot_count}");
     }
 
-    fn reverse() { 
-        
-    }
+    fn reverse() {}
 }
