@@ -92,8 +92,8 @@ pub fn mul_poly_scalar_slice_hexl(
     scalar_slice: &[u64],
 ) {
     izip!(
-        res.coefficients.outer_iter_mut(),
-        a.coefficients.outer_iter(),
+        res.coefficients_mut().outer_iter_mut(),
+        a.coefficients().outer_iter(),
         scalar_slice.iter(),
         poly_ctx.moduli_ops().iter()
     )
@@ -126,8 +126,8 @@ pub fn fma_poly_scale_slice_hexl(
     scalar_slice: &[u64],
 ) {
     izip!(
-        res.coefficients.outer_iter_mut(),
-        a.coefficients.outer_iter(),
+        res.coefficients_mut().outer_iter_mut(),
+        a.coefficients().outer_iter(),
         scalar_slice.iter(),
         poly_ctx.moduli_ops().iter()
     )

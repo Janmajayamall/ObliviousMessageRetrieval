@@ -15,7 +15,9 @@ use core::time;
 use itertools::{izip, Itertools};
 use ndarray::{s, Array, Array2};
 use rand_chacha::rand_core::le;
-use rayon::prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelIterator};
+use rayon::prelude::{
+    IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
+};
 use rayon::slice::ParallelSliceMut;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 
@@ -42,6 +44,7 @@ pub fn pvw_setup(
 
     let mut checkpoint_cts = vec![vec![]; 4];
     let mut cts = pvw_sk_cts.to_vec();
+
     for j in 0..threads_by_4 as usize {
         // Checkpoints for each thread are cts rotated by j*rots_per_thread.
         for i in 0..4 {
@@ -51,11 +54,11 @@ pub fn pvw_setup(
         // No rotations are needed anymore once checkpoints for last thread have been stored.
         if j != (threads_by_4 as usize) - 1 {
             // rotate the ciphertexts till next checkpoint
-            for _ in 0..rots_per_thread {
-                for i in 0..4 {
-                    cts[i] = evaluator.rotate(&cts[i], 1, ek);
+            cts.par_iter_mut().for_each(|ct| {
+                for _ in 0..rots_per_thread {
+                    *ct = evaluator.rotate(&ct, 1, ek);
                 }
-            }
+            });
         }
     }
 
