@@ -1,21 +1,26 @@
 use bfv::{
     BfvParameters, Ciphertext, Encoding, EvaluationKey, Evaluator, GaloisKey, Modulus, Plaintext,
-    PolyType, RelinearizationKey, Representation, SecretKey,
+    Poly, PolyType, RelinearizationKey, Representation, SecretKey,
 };
 use itertools::{izip, Itertools};
 use ndarray::Array2;
-use rand::thread_rng;
+use rand::{thread_rng, Rng};
 use rayon::slice::ParallelSliceMut;
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
     hash::Hash,
+    os::unix::thread,
     sync::Arc,
 };
 
 use omr::{
-    client::{encrypt_pvw_sk, gen_pv_exapnd_rtgs},
+    client::{
+        construct_lhs, construct_rhs, encrypt_pvw_sk, gen_pv_exapnd_rtgs, pv_decompress,
+        solve_equations,
+    },
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
+    plaintext,
     preprocessing::{assign_buckets_and_weights, pre_process_batch},
     pvw::*,
     server::{
@@ -27,43 +32,168 @@ use omr::{
     },
     time_it,
     utils::{generate_random_payloads, precompute_range_constants},
-    GAMMA, K,
+    BUCKET_SIZE, GAMMA, K,
 };
 
-fn phase1() {
+fn generate_clues(
+    pvw_pk: &PvwPublicKey,
+    pvw_params: &PvwParameters,
+    pertinent_indices: &[usize],
+    count: usize,
+) -> Vec<PvwCiphertext> {
     let mut rng = thread_rng();
+
+    let other_pvw_sk = PvwSecretKey::random(pvw_params, &mut rng);
+    let other_pvw_pk = other_pvw_sk.public_key(&mut rng);
+    let non_peritnent_clue = other_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+
+    // generate hints
+    let partinent_clue = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..count)
+        .into_iter()
+        .map(|i| {
+            if pertinent_indices.contains(&i) {
+                partinent_clue.clone()
+            } else {
+                non_peritnent_clue.clone()
+            }
+        })
+        .collect_vec();
+
+    clues
+}
+
+fn demo() {
+    let mut rng = thread_rng();
+
+    let params = BfvParameters::default(15, 1 << 15);
+
+    // Client's PVW keys
     let pvw_params = Arc::new(PvwParameters::default());
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
-    let params = BfvParameters::default(15, 1 << 8);
+    // Client's BFV keys
     let sk = SecretKey::random(params.degree, &mut rng);
 
-    // generate hints
-    println!("Generating clues...");
-    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
-    let clues = (0..params.degree)
-        .into_iter()
-        .map(|_| clue1.clone())
-        .collect_vec();
+    // a random secret key as a placeholder to be passed around in functions. Should be
+    // removed in production.
+    let random_sk = SecretKey::random(params.degree, &mut rng);
 
     let evaluator = Evaluator::new(params);
 
-    println!("Preprocessing batch...");
-    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
-
-    println!("Encrypting pvw sk...");
+    // Client's detection keys
     let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+    let phase1_ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+    let phase2_ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, 12);
 
-    println!("Generating keys");
-    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+    // generate pertinent indices
+    let pertinency_message_count = 64;
+    let mut pertinent_indices = vec![];
+    while pertinent_indices.len() != pertinency_message_count {
+        let index = rng.gen_range(0..evaluator.params().degree);
+        if !pertinent_indices.contains(&index) {
+            pertinent_indices.push(index);
+        }
+    }
+    pertinent_indices.sort();
 
-    #[cfg(feature = "precomp_pvw")]
-    // pre compute pvw_sk_cts rotations for maximum core usage
-    let precomputed_pvw_sk_cts = pvw_setup(&evaluator, &ek, &pvw_sk_cts);
+    // generate clues and payloads
+    let clues = generate_clues(
+        &pvw_pk,
+        &pvw_params,
+        &pertinent_indices,
+        evaluator.params().degree,
+    );
+    let payloads = generate_random_payloads(evaluator.params().degree);
 
-    println!("Running Pvw decrypt...");
+    // pre-processing
+    let (precomp_hint_a, precomp_hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
+    let precomp_range_constants =
+        precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
+    let precomp_sub_from_one = sub_from_one_precompute(evaluator.params(), 0);
 
+    // Running phase 1
+    time_it!("Phase 1",
+        let mut phase1_ciphertext = phase1(
+            &evaluator,
+            &pvw_params,
+            &precomp_hint_a,
+            &precomp_hint_b,
+            &precomp_range_constants,
+            &precomp_sub_from_one,
+            &phase1_ek,
+            &random_sk,
+            &pvw_sk_cts,
+        );
+    );
+
+    // Precomp phase 2
+    let (_, buckets, weights) = assign_buckets_and_weights(
+        K * 2,
+        GAMMA,
+        evaluator.params().plaintext_modulus,
+        evaluator.params().degree,
+        &mut rng,
+    );
+    let level = 12;
+
+    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
+    evaluator.mod_down_level(&mut phase1_ciphertext, level);
+
+    let (pts_32_batch, pts_4_roll, pts_1_roll) =
+        phase2_precomputes(&evaluator, evaluator.params().degree, level);
+
+    // Phase 2
+    time_it!("Phase 2",
+        let (indices_ct, weights_ct) = phase2(
+            &evaluator,
+            &mut phase1_ciphertext,
+            &phase2_ek,
+            &buckets,
+            &weights,
+            &payloads,
+            &pts_32_batch,
+            &pts_4_roll,
+            &pts_1_roll,
+            level,
+            &sk,
+        );
+    );
+
+    // Client
+    time_it!("Client",
+        let messages = client_processing(
+            &evaluator,
+            &indices_ct,
+            &weights_ct,
+            &sk,
+            &buckets,
+            &weights,
+        );
+    );
+
+    // Check correctness
+    let mut expected_messages = vec![];
+    pertinent_indices.iter().for_each(|i| {
+        expected_messages.push(payloads[*i].clone());
+    });
+
+    assert_eq!(expected_messages, messages);
+}
+
+fn phase1(
+    evaluator: &Evaluator,
+    pvw_params: &PvwParameters,
+    precomp_hint_a: &[Plaintext],
+    precomp_hint_b: &[Poly],
+    precomp_range_constants: &Array2<u64>,
+    precomp_sub_from_one: &[u64],
+    ek: &EvaluationKey,
+    sk: &SecretKey,
+    #[cfg(feature = "precomp_pvw")] precomputed_pvw_sk_cts: &[Vec<Ciphertext>],
+    #[cfg(not(feature = "precomp_pvw"))] pvw_sk_cts: &[Ciphertext],
+) -> Ciphertext {
     #[cfg(feature = "precomp_pvw")]
     let decrypted_cts = {
         pvw_decrypt_precomputed(
@@ -81,62 +211,46 @@ fn phase1() {
     let decrypted_cts = pvw_decrypt(
         &pvw_params,
         &evaluator,
-        &hint_a,
-        &hint_b,
+        precomp_hint_a,
+        precomp_hint_b,
         &pvw_sk_cts,
         ek.get_rtg_ref(1, 0),
         &sk,
     );
 
-    decrypted_cts.iter().for_each(|ct| {
-        println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
-    });
+    // decrypted_cts.iter().for_each(|ct| {
+    //     println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
+    // });
 
-    let constants = precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
-    let sub_from_one_precompute = sub_from_one_precompute(evaluator.params(), 0);
-
-    println!("Running range function...");
     // ranged cts are in coefficient form
     let ranged_cts = range_fn_4_times(
         &decrypted_cts,
         &evaluator,
         &ek,
-        &constants,
-        &sub_from_one_precompute,
+        precomp_range_constants,
+        precomp_sub_from_one,
         &sk,
     );
 
-    let mut v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
-
-    println!("phase 1 end ct noise: {}", evaluator.measure_noise(&sk, &v));
-    phase2(&evaluator, &sk, &mut v);
+    let v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
+    v
 }
 
-fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &mut Ciphertext) {
-    let mut rng = thread_rng();
-
-    // generate evaluation key for phase 2
-    let ek = gen_pv_exapnd_rtgs(evaluator.params(), sk, 12);
-
-    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
-    evaluator.mod_down_level(pv, 12);
-
+fn phase2(
+    evaluator: &Evaluator,
+    pv: &mut Ciphertext,
+    ek: &EvaluationKey,
+    buckets: &[Vec<u64>],
+    weights: &[Vec<u64>],
+    payloads: &[Vec<u64>],
+    pts_32_batch: &[Plaintext],
+    pts_4_roll: &[Plaintext],
+    pts_1_roll: &[Plaintext],
+    level: usize,
+    sk: &SecretKey,
+) -> (Ciphertext, Ciphertext) {
     // switch to Evaluation representation for efficient rotations and scalar multiplications
     evaluator.ciphertext_change_representation(pv, Representation::Evaluation);
-
-    let degree = evaluator.params().degree;
-    let level = 12;
-
-    // phase 2 precomputes
-    let (pts_32_batch, pts_4_roll, pts_1_roll) = phase2_precomputes(evaluator, degree, level);
-    let (_, buckets, weights) = assign_buckets_and_weights(
-        K * 2,
-        GAMMA,
-        evaluator.params().plaintext_modulus,
-        evaluator.params().degree,
-        &mut rng,
-    );
-    let payloads = generate_random_payloads(evaluator.params().degree);
 
     let (indices_ct, weights_ct) = phase2::phase2(
         evaluator,
@@ -152,14 +266,28 @@ fn phase2(evaluator: &Evaluator, sk: &SecretKey, pv: &mut Ciphertext) {
         sk,
     );
 
-    println!(
-        "Indices Ct noise: {}",
-        evaluator.measure_noise(sk, &indices_ct)
-    );
-    println!(
-        "Weight Ct noise: {}",
-        evaluator.measure_noise(sk, &weights_ct)
-    );
+    (indices_ct, weights_ct)
+}
+
+fn client_processing(
+    evaluator: &Evaluator,
+    indices_ct: &Ciphertext,
+    weights_ct: &Ciphertext,
+    sk: &SecretKey,
+    buckets: &[Vec<u64>],
+    weights: &[Vec<u64>],
+) -> Vec<Vec<u64>> {
+    // construct lhs
+    let pv = pv_decompress(evaluator, indices_ct, sk);
+    let lhs = construct_lhs(&pv, buckets, weights, K, GAMMA, evaluator.params().degree);
+
+    // decrypt weights_ct to construct rhs
+    let weights_vec =
+        evaluator.plaintext_decode(&evaluator.decrypt(sk, weights_ct), Encoding::default());
+    let rhs = construct_rhs(&weights_vec, BUCKET_SIZE);
+
+    let messages = solve_equations(lhs, rhs, K, evaluator.params().plaintext_modulus);
+    messages
 }
 
 fn powers_of_x() {

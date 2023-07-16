@@ -113,7 +113,7 @@ pub fn optimised_pvw_fma_with_rot_and_reduction(
 
 /// pvw_decrypt can only use 4 cores at once.
 pub fn pvw_decrypt(
-    pvw_params: &Arc<PvwParameters>,
+    pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hint_a_pts: &[Plaintext],
     hint_b_pts: &[Poly],

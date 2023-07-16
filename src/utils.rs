@@ -20,14 +20,18 @@ pub fn read_range_coeffs() -> Vec<u64> {
     coeffs.to_vec()
 }
 
+// Measures time in ms for enclosed code block.
+// Credit: https://github.com/zama-ai/demo_z8z/blob/1f24eeaf006263543062e90f1d1692d381a726cf/src/zqz/utils.rs#L28C1-L42C2
 #[macro_export]
 macro_rules! time_it{
-    ($tag:literal, $($tt:tt)+) => {
-        let timer = std::time::Instant::now();
+    ($title: tt, $($block:tt)+) => {
+        let __now = std::time::SystemTime::now();
         $(
-            $tt
+           $block
         )+
-        println!("{}: {:?}", $tag, timer.elapsed());
+        let __time = __now.elapsed().unwrap().as_millis();
+        let __ms_time = format!("{} ms", __time);
+        println!("{} duration: {}", $title, __ms_time);
     }
 }
 

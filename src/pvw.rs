@@ -32,7 +32,7 @@ impl Default for PvwParameters {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PvwCiphertext {
-    par: Arc<PvwParameters>,
+    par: PvwParameters,
     pub a: Vec<u64>,
     pub b: Vec<u64>,
 }
@@ -41,7 +41,7 @@ pub struct PvwPublicKey {
     a: Array2<u64>,
     b: Array2<u64>,
     seed: <ChaChaRng as SeedableRng>::Seed,
-    par: Arc<PvwParameters>,
+    par: PvwParameters,
 }
 
 impl PvwPublicKey {
@@ -92,14 +92,11 @@ impl PvwPublicKey {
 
 pub struct PvwSecretKey {
     pub key: Array2<u64>,
-    pub par: Arc<PvwParameters>,
+    pub par: PvwParameters,
 }
 
 impl PvwSecretKey {
-    pub fn random<R: RngCore + CryptoRng>(
-        params: &Arc<PvwParameters>,
-        rng: &mut R,
-    ) -> PvwSecretKey {
+    pub fn random<R: RngCore + CryptoRng>(params: &PvwParameters, rng: &mut R) -> PvwSecretKey {
         let q = Modulus::new(params.q);
 
         let sk = Array::from_shape_vec(

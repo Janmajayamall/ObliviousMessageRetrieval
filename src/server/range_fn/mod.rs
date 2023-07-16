@@ -167,11 +167,9 @@ pub fn range_fn(
     );
 
     // change k_powers to `Evaluation` for efficient plaintext multiplication
-    time_it!("k_powers change representation",
-         k_powers.iter_mut().for_each(|ct| {
-            evaluator.ciphertext_change_representation(ct, Representation::Evaluation);
-        });
-    );
+    k_powers.iter_mut().for_each(|ct| {
+        evaluator.ciphertext_change_representation(ct, Representation::Evaluation);
+    });
 
     let level = 0;
     let q_ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
@@ -180,42 +178,40 @@ pub fn range_fn(
     // k loop needs to run 255 times. `set_len` fairly distributes 255 iterations among available threads.
     let set_len = (255.0 / threads).ceil() as usize;
 
-    time_it!("Loops",
-        // calculate degree [1..256], ie the first k loop, seprarately since it does not
-        // needs to be multiplied with any m_power and would remain in Q basis.
-        let m_0th_loop = {
-            #[cfg(target_arch = "x86_64")]
-            let mut res_ct =
-                range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
+    // calculate degree [1..256], ie the first k loop, seprarately since it does not
+    // needs to be multiplied with any m_power and would remain in Q basis.
+    let m_0th_loop = {
+        #[cfg(target_arch = "x86_64")]
+        let mut res_ct =
+            range_fn_fma::optimised_range_fn_fma_hexl(&q_ctx, &k_powers, &constants, 0, level);
 
-            #[cfg(not(target_arch = "x86_64"))]
-            let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
-                &q_ctx,
-                evaluator.params(),
-                &k_powers,
-                &constants,
-                0,
-                level,
-            );
-
-            // change representation to Coefficient to stay consistent with output of rest of the m loops
-            evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
-            res_ct
-        };
-
-        // process_m_loop processes m^th loop for values in range [start, end)
-        let mut sum_ct = process_m_loop(
-            evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
+        #[cfg(not(target_arch = "x86_64"))]
+        let mut res_ct = range_fn_fma::optimised_range_fn_fma_u128(
+            &q_ctx,
+            evaluator.params(),
+            &k_powers,
+            &constants,
+            0,
+            level,
         );
 
-        // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
-        // chiphertext by P/t and switch to Q basis.
-        let sum_ct = evaluator.scale_and_round(&mut sum_ct);
-        let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
+        // change representation to Coefficient to stay consistent with output of rest of the m loops
+        evaluator.ciphertext_change_representation(&mut res_ct, Representation::Coefficient);
+        res_ct
+    };
 
-        // add output of first loop, processed separately, to summation of output of rest of the loops
-        evaluator.add_assign(&mut sum_ct, &m_0th_loop);
+    // process_m_loop processes m^th loop for values in range [start, end)
+    let mut sum_ct = process_m_loop(
+        evaluator, &q_ctx, level, constants, &k_powers, &m_powers, set_len, 1, 256,
     );
+
+    // `sum_ct` is in PQ basis, instead of usual Q basis. Call `scale_and_round` to scale
+    // chiphertext by P/t and switch to Q basis.
+    let sum_ct = evaluator.scale_and_round(&mut sum_ct);
+    let mut sum_ct = evaluator.relinearize(&sum_ct, ek);
+
+    // add output of first loop, processed separately, to summation of output of rest of the loops
+    evaluator.add_assign(&mut sum_ct, &m_0th_loop);
 
     sub_from_one(evaluator.params(), &mut sum_ct, sub_from_one_precompute);
     sum_ct
