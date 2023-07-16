@@ -31,7 +31,7 @@ use omr::{
         range_fn::{range_fn, range_fn_4_times},
     },
     time_it,
-    utils::{generate_random_payloads, precompute_range_constants},
+    utils::{generate_bfv_parameters, generate_random_payloads, precompute_range_constants},
     BUCKET_SIZE, GAMMA, K,
 };
 
@@ -66,7 +66,7 @@ fn generate_clues(
 fn demo() {
     let mut rng = thread_rng();
 
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
 
     // Client's PVW keys
     let pvw_params = Arc::new(PvwParameters::default());
@@ -108,12 +108,14 @@ fn demo() {
     let payloads = generate_random_payloads(evaluator.params().degree);
 
     // pre-processing
+    println!("Phase 1 precomputation...");
     let (precomp_hint_a, precomp_hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
     let precomp_range_constants =
         precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
     let precomp_sub_from_one = sub_from_one_precompute(evaluator.params(), 0);
 
     // Running phase 1
+    println!("Phase 1...");
     time_it!("Phase 1",
         let mut phase1_ciphertext = phase1(
             &evaluator,
@@ -123,9 +125,22 @@ fn demo() {
             &precomp_range_constants,
             &precomp_sub_from_one,
             &phase1_ek,
-            &random_sk,
+            &sk,
             &pvw_sk_cts,
         );
+    );
+
+    println!(
+        "phase 1 noise: {}",
+        evaluator.measure_noise(&sk, &phase1_ciphertext)
+    );
+
+    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
+    evaluator.mod_down_level(&mut phase1_ciphertext, 12);
+
+    println!(
+        "phase 1 noise after mod down: {}",
+        evaluator.measure_noise(&sk, &phase1_ciphertext)
     );
 
     // Precomp phase 2
@@ -137,9 +152,6 @@ fn demo() {
         &mut rng,
     );
     let level = 12;
-
-    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
-    evaluator.mod_down_level(&mut phase1_ciphertext, level);
 
     let (pts_32_batch, pts_4_roll, pts_1_roll) =
         phase2_precomputes(&evaluator, evaluator.params().degree, level);
@@ -218,9 +230,9 @@ fn phase1(
         &sk,
     );
 
-    // decrypted_cts.iter().for_each(|ct| {
-    //     println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
-    // });
+    decrypted_cts.iter().for_each(|ct| {
+        println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
+    });
 
     // ranged cts are in coefficient form
     let ranged_cts = range_fn_4_times(
@@ -230,6 +242,23 @@ fn phase1(
         precomp_range_constants,
         precomp_sub_from_one,
         &sk,
+    );
+
+    println!(
+        "Ranged ct0 noise: {}",
+        evaluator.measure_noise(sk, &ranged_cts.0 .0)
+    );
+    println!(
+        "Ranged ct0 noise: {}",
+        evaluator.measure_noise(sk, &ranged_cts.0 .1)
+    );
+    println!(
+        "Ranged ct0 noise: {}",
+        evaluator.measure_noise(sk, &ranged_cts.1 .0)
+    );
+    println!(
+        "Ranged ct0 noise: {}",
+        evaluator.measure_noise(sk, &ranged_cts.1 .1)
     );
 
     let v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
@@ -292,7 +321,7 @@ fn client_processing(
 
 fn powers_of_x() {
     let mut rng = thread_rng();
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
     let sk = SecretKey::random(params.degree, &mut rng);
     let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
 
@@ -325,7 +354,7 @@ fn call_pvw_decrypt() {
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
     let sk = SecretKey::random(params.degree, &mut rng);
 
     let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
@@ -343,7 +372,7 @@ fn call_pvw_decrypt() {
     let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
 
     time_it!("Pvw Decrypt",
-        let _ = pvw_decrypt(
+        let res = pvw_decrypt(
                 &pvw_params,
                 &evaluator,
                 &hint_a,
@@ -353,6 +382,11 @@ fn call_pvw_decrypt() {
                 &sk,
             );
     );
+
+    dbg!(evaluator.measure_noise(&sk, &res[0]));
+    dbg!(evaluator.measure_noise(&sk, &res[1]));
+    dbg!(evaluator.measure_noise(&sk, &res[2]));
+    dbg!(evaluator.measure_noise(&sk, &res[3]));
 }
 
 fn call_pvw_decrypt_precomputed() {
@@ -361,7 +395,7 @@ fn call_pvw_decrypt_precomputed() {
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
     let sk = SecretKey::random(params.degree, &mut rng);
 
     let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
@@ -397,7 +431,7 @@ fn call_pvw_decrypt_precomputed() {
 
 /// Wrapper for setting up necessary things before calling range_fn
 fn call_range_fn_once() {
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
     let level = 0;
     let ctx = params.poly_ctx(&PolyType::Q, level);
 
@@ -429,7 +463,7 @@ fn main() {
         .num_threads(threads)
         .build_global()
         .unwrap();
-
+    demo();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();
 

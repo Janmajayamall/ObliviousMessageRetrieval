@@ -89,6 +89,13 @@ pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &Sec
     );
 }
 
+pub fn generate_bfv_parameters() -> BfvParameters {
+    let moduli = vec![50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
+    let mut params = BfvParameters::new(&moduli, 65537, 1 << 15);
+    params.enable_hybrid_key_switching(&[50, 50, 50]);
+    params
+}
+
 mod tests {
     use bfv::Modulus;
 

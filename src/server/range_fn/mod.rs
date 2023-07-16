@@ -280,14 +280,14 @@ mod tests {
         optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
         plaintext::powers_of_x_modulus,
         preprocessing::precompute_indices_pts,
-        utils::precompute_range_constants,
+        utils::{generate_bfv_parameters, precompute_range_constants},
     };
     use bfv::{BfvParameters, Encoding};
     use rand::thread_rng;
 
     #[test]
     fn range_fn_works() {
-        let params = BfvParameters::default(15, 1 << 3);
+        let params = generate_bfv_parameters();
         let level = 0;
         let ctx = params.poly_ctx(&PolyType::Q, level);
 

@@ -370,7 +370,7 @@ mod tests {
         optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
         plaintext::powers_of_x_modulus,
         preprocessing::{assign_buckets_and_weights, precompute_indices_pts},
-        utils::{generate_random_payloads, precompute_range_constants},
+        utils::{generate_bfv_parameters, generate_random_payloads, precompute_range_constants},
         K,
     };
     use bfv::{BfvParameters, Encoding};
@@ -379,7 +379,7 @@ mod tests {
     #[test]
     fn test_phase2() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = generate_bfv_parameters();
         let sk = SecretKey::random(params.degree, &mut rng);
 
         let m = (0..params.degree)
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn test_pv_expand_batch() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = generate_bfv_parameters();
         let sk = SecretKey::random(params.degree, &mut rng);
         let degree = params.degree;
         let m = vec![3; params.degree];

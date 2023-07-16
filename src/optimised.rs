@@ -222,14 +222,14 @@ mod tests {
     use bfv::Evaluator;
     use statrs::function::evaluate;
 
-    use crate::utils::{precompute_range_constants, read_range_coeffs};
+    use crate::utils::{generate_bfv_parameters, precompute_range_constants, read_range_coeffs};
 
     use super::*;
 
     #[test]
     fn optimised_pvw_fma_works() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = generate_bfv_parameters();
         let sk = SecretKey::random(params.degree, &mut rng);
 
         let mut m0 = params
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn optimised_add_range_fn_works() {
-        let params = BfvParameters::default(12, 1 << 15);
+        let params = generate_bfv_parameters();
         let mut rng = thread_rng();
         let m = params
             .plaintext_modulus_op
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn sub_from_one_works() {
-        let params = BfvParameters::default(5, 1 << 8);
+        let params = generate_bfv_parameters();
         let mut rng = thread_rng();
         let m = params
             .plaintext_modulus_op

@@ -219,7 +219,7 @@ pub fn optimised_range_fn_fma_hexl(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::{precompute_range_constants, read_range_coeffs};
+    use crate::utils::{generate_bfv_parameters, precompute_range_constants, read_range_coeffs};
     use bfv::Encoding;
     use rand::thread_rng;
 
@@ -227,7 +227,7 @@ mod tests {
     fn test_optimised_range_fn_fma() {
         let mut rng = thread_rng();
         // let params = BfvParameters::new(&vec![59; 15], 65537, 1 << 15);
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = generate_bfv_parameters();
         let m = params
             .plaintext_modulus_op
             .random_vec(params.degree, &mut rng);

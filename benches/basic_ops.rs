@@ -5,7 +5,10 @@ use bfv::{
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
 use ndarray::Array2;
-use omr::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma};
+use omr::{
+    optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma},
+    utils::generate_bfv_parameters,
+};
 use rand::{thread_rng, Rng};
 use std::{result, sync::Arc, time::Duration};
 
@@ -15,7 +18,7 @@ fn bench(c: &mut Criterion) {
     // group.sample_size(10);
 
     let mut rng = thread_rng();
-    let params = BfvParameters::default(15, 1 << 15);
+    let params = generate_bfv_parameters();
     let m = params
         .plaintext_modulus_op
         .random_vec(params.degree, &mut rng);

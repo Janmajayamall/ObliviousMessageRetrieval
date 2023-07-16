@@ -9,7 +9,7 @@ use omr::{
     server::range_fn::range_fn_fma::{
         mul_poly_scalar_u128, optimised_range_fn_fma_u128, scalar_mul_u128,
     },
-    utils::precompute_range_constants,
+    utils::{generate_bfv_parameters, precompute_range_constants},
 };
 use rand::thread_rng;
 
@@ -32,7 +32,7 @@ fn bench(c: &mut Criterion) {
         // For ex, when degree is 2^15 in `fma_poly_scale_slice_hexl` if it takes `x` us when mod size is 1, we expect it to take `15x` us when mod size is 15. However, this does
         // not happen. I am unsure what's the reason. Is it cache misses? Smaller cache size?
         for mod_size in [1, 3, 7, 15] {
-            let params = BfvParameters::default(mod_size, degree);
+            let params = generate_bfv_parameters();
             let evaluator = Evaluator::new(params);
             let params = evaluator.params();
             let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);

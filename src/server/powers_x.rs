@@ -124,7 +124,7 @@ pub fn evaluate_powers(
 }
 
 mod tests {
-    use crate::plaintext::powers_of_x_modulus;
+    use crate::{plaintext::powers_of_x_modulus, utils::generate_bfv_parameters};
 
     use super::*;
     use bfv::{BfvParameters, Encoding};
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn test_evaluate_powers() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(15, 1 << 15);
+        let params = generate_bfv_parameters();
         let sk = SecretKey::random(params.degree, &mut rng);
         let m = vec![3; params.degree];
 
@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn powers_of_x_ct_works() {
         let mut rng = thread_rng();
-        let params = BfvParameters::default(5, 1 << 3);
+        let params = generate_bfv_parameters();
         let sk = SecretKey::random(params.degree, &mut rng);
         let m = vec![3; params.degree];
 
