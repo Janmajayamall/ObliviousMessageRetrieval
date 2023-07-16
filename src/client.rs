@@ -45,21 +45,44 @@ pub fn encrypt_pvw_sk<R: CryptoRng + RngCore>(
     cts
 }
 
+pub fn evaluation_key(params: &BfvParameters, sk: &SecretKey) -> EvaluationKey {
+    let mut rng = thread_rng();
+
+    #[cfg(feature = "level")]
+    let rlk_levels = (0..12).into_iter().collect_vec();
+
+    #[cfg(not(feature = "level"))]
+    let rlk_levels = vec![0];
+
+    let level = 12;
+    let (mut rtg_indices, mut rtg_levels) = get_pv_expand_rtgs_vecs(level, params.degree);
+
+    // pvw rot key
+    rtg_indices.push(1);
+    rtg_levels.push(0);
+
+    EvaluationKey::new(params, sk, &rlk_levels, &rtg_levels, &rtg_indices, &mut rng)
+}
+
 pub fn gen_pv_exapnd_rtgs(params: &BfvParameters, sk: &SecretKey, level: usize) -> EvaluationKey {
     // create galois keys
     let mut rng = thread_rng();
+    let (rtg_indices, rtg_levels) = get_pv_expand_rtgs_vecs(level, params.degree);
+    EvaluationKey::new(params, sk, &[], &rtg_levels, &rtg_indices, &mut rng)
+}
 
+pub fn get_pv_expand_rtgs_vecs(level: usize, degree: usize) -> (Vec<isize>, Vec<usize>) {
     let mut rtg_indices = vec![];
     let mut rtg_levels = vec![];
     // keys for 32 expand
     let mut i = 32;
-    while i < params.degree as isize {
+    while i < degree as isize {
         rtg_indices.push(i);
         rtg_levels.push(level);
         i *= 2;
     }
     // row swap
-    rtg_indices.push(2 * params.degree as isize - 1);
+    rtg_indices.push(2 * degree as isize - 1);
     rtg_levels.push(level);
 
     // keys for 4 expand
@@ -78,7 +101,7 @@ pub fn gen_pv_exapnd_rtgs(params: &BfvParameters, sk: &SecretKey, level: usize) 
         i *= 2;
     }
 
-    EvaluationKey::new(params, sk, &[], &rtg_levels, &rtg_indices, &mut rng)
+    (rtg_indices, rtg_levels)
 }
 
 pub fn pv_decompress(evaluator: &Evaluator, indices_ct: &Ciphertext, sk: &SecretKey) -> Vec<u64> {

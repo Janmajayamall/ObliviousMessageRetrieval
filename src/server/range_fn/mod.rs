@@ -1,12 +1,13 @@
-use crate::optimised::sub_from_one;
 use crate::server::powers_x::evaluate_powers;
-use crate::time_it;
+use crate::{level_down, time_it};
+use crate::{optimised::sub_from_one, print_noise};
 use bfv::{
     Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyContext, PolyType,
     RelinearizationKey, Representation, SecretKey,
 };
 use itertools::Itertools;
 use ndarray::Array2;
+use rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
 
 pub mod range_fn_fma;
 
@@ -113,9 +114,30 @@ pub fn range_fn(
     let mut k_powers = vec![placeholder.clone(); 128];
     // calcuate x^2 separately to simplify the code
     k_powers[0] = ciphertext_square_and_relin(evaluator, ek, ct);
+
+    level_down!( evaluator.mod_down_next(&mut k_powers[0]););
+
+    print_noise!(
+        println!(
+            "k_powers base 2 noise: {}",
+            evaluator.measure_noise(sk, &k_powers[0])
+        );
+    );
+
     for base in [4, 8, 16, 32, 64, 128, 256] {
         k_powers[(base >> 1) - 1] =
             ciphertext_square_and_relin(evaluator, ek, &k_powers[(base >> 2) - 1]);
+
+        level_down!(if base == 8 || base == 32 || base == 64 || base == 256 {
+            evaluator.mod_down_next(&mut k_powers[(base >> 1) - 1]);
+        });
+
+        print_noise!(
+            println!(
+                "k_powers base {base} noise: {}",
+                evaluator.measure_noise(sk, &k_powers[(base >> 1) - 1])
+            );
+        );
     }
 
     // calculate all powers in range [1,255]
@@ -148,30 +170,55 @@ pub fn range_fn(
             // For example, all even numbers in range [1,256] can be obtained by multiplying all values in
             // range [1,128] by 2. Thus to calculate only even powers in range [0, 256] we calculate all powers
             // of `a` in range [1,128] where `a=x^2`.
-            evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, cores);
-            evaluate_powers(evaluator, ek, 4, 8, &mut k_powers, true, cores);
-            evaluate_powers(evaluator, ek, 8, 16, &mut k_powers, true, cores);
-            evaluate_powers(evaluator, ek, 16, 32, &mut k_powers, true, cores);
-            evaluate_powers(evaluator, ek, 32, 64, &mut k_powers, true, cores);
-            evaluate_powers(evaluator, ek, 64, 128, &mut k_powers, true, cores);
+            evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 4, 8, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 8, 16, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 16, 32, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 32, 64, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 64, 128, &mut k_powers, true, cores, sk);
         },
         || {
-            evaluate_powers(evaluator, ek, 2, 4, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 4, 8, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 8, 16, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 16, 32, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 32, 64, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 64, 128, &mut m_powers, false, cores);
-            evaluate_powers(evaluator, ek, 128, 256, &mut m_powers, false, cores);
+            evaluate_powers(evaluator, ek, 2, 4, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 4, 8, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 8, 16, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 16, 32, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 32, 64, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 64, 128, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 128, 256, &mut m_powers, false, cores, sk);
         },
     );
 
-    // change k_powers to `Evaluation` for efficient plaintext multiplication
-    k_powers.iter_mut().for_each(|ct| {
-        evaluator.ciphertext_change_representation(ct, Representation::Evaluation);
-    });
+    // don't re-declare match level inside `level_down` since the macro creates a new scope
+    let mut match_level = 0;
+    level_down!(
+        // lose another level from m_powers to reduce noise for range (128,255]. Then
+        // match level of all ciphertexts in m_powers and k_powers
+        match_level = m_powers.last().unwrap().level() + 1;
+        assert!(match_level == 10);
 
-    let level = 0;
+        time_it!("Matching level k_powers",
+            k_powers.par_iter_mut().for_each(|mut c| {
+                // mod down before changing representation
+                evaluator.mod_down_level(&mut c, match_level);
+
+                // change k_powers to `Evaluation` for efficient plaintext multiplication
+                evaluator.ciphertext_change_representation(&mut c, Representation::Evaluation);
+            });
+
+
+        );
+
+        time_it!("Matching level m_powers",
+            m_powers.par_iter_mut().for_each(|mut c| {
+                // mod down before changing representation
+                evaluator.mod_down_level(&mut c, match_level);
+            });
+
+        );
+    );
+
+    let level = match_level;
+
     let q_ctx = evaluator.params().poly_ctx(&PolyType::Q, level);
 
     let threads = rayon::current_num_threads() as f64;
@@ -288,12 +335,18 @@ mod tests {
     #[test]
     fn range_fn_works() {
         let params = generate_bfv_parameters();
-        let level = 0;
-        let ctx = params.poly_ctx(&PolyType::Q, level);
+
+        #[cfg(feature = "level")]
+        let precompute_level = 10;
+
+        #[cfg(not(feature = "level"))]
+        let precompute_level = 0;
+
+        let ctx = params.poly_ctx(&PolyType::Q, precompute_level);
 
         let mut rng = thread_rng();
         let constants = precompute_range_constants(&ctx);
-        let sub_one_precompute = sub_from_one_precompute(&params, level);
+        let sub_one_precompute = sub_from_one_precompute(&params, precompute_level);
 
         let sk = SecretKey::random(params.degree, &mut rng);
         let mut m = params
@@ -301,15 +354,25 @@ mod tests {
             .random_vec(params.degree, &mut rng);
 
         let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+        let pt = evaluator.plaintext_encode(&m, Encoding::simd(0));
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
+        unsafe { evaluator.add_noise(&mut ct, 40) };
+        dbg!(evaluator.measure_noise(&sk, &ct));
+
         // gen evaluation key
-        let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
+        let ek = EvaluationKey::new(
+            evaluator.params(),
+            &sk,
+            &(0..12).into_iter().collect_vec(),
+            &[],
+            &[],
+            &mut rng,
+        );
 
         // limit to single thread
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(10)
+            .num_threads(8)
             .build_global()
             .unwrap();
 

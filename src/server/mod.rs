@@ -1,5 +1,7 @@
 use bfv::{Ciphertext, EvaluationKey, Evaluator, SecretKey};
 
+use crate::level_down;
+
 pub mod phase2;
 pub mod powers_x;
 pub mod pvw_decrypt;
@@ -20,12 +22,22 @@ pub fn mul_and_reduce_ranged_cts_to_1(
     let (v0, v1) = rayon::join(
         || {
             let v0 = evaluator.mul(&ranged_cts.0 .0, &ranged_cts.0 .1);
-            let v0 = evaluator.relinearize(&v0, &ek);
+            let mut v0 = evaluator.relinearize(&v0, &ek);
+
+            level_down!(
+                evaluator.mod_down_next(&mut v0);
+            );
+
             v0
         },
         || {
             let v1 = evaluator.mul(&ranged_cts.1 .0, &ranged_cts.1 .1);
-            let v1 = evaluator.relinearize(&v1, &ek);
+            let mut v1 = evaluator.relinearize(&v1, &ek);
+
+            level_down!(
+                evaluator.mod_down_next(&mut v1);
+            );
+
             v1
         },
     );

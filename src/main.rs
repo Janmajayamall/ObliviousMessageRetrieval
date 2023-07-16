@@ -9,6 +9,7 @@ use rayon::slice::ParallelSliceMut;
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
+    f32::consts::E,
     hash::Hash,
     os::unix::thread,
     sync::Arc,
@@ -16,12 +17,13 @@ use std::{
 
 use omr::{
     client::{
-        construct_lhs, construct_rhs, encrypt_pvw_sk, gen_pv_exapnd_rtgs, pv_decompress,
-        solve_equations,
+        construct_lhs, construct_rhs, encrypt_pvw_sk, evaluation_key, gen_pv_exapnd_rtgs,
+        pv_decompress, solve_equations,
     },
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
     plaintext,
     preprocessing::{assign_buckets_and_weights, pre_process_batch},
+    print_noise,
     pvw::*,
     server::{
         mul_and_reduce_ranged_cts_to_1,
@@ -84,8 +86,7 @@ fn demo() {
 
     // Client's detection keys
     let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
-    let phase1_ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
-    let phase2_ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, 12);
+    let ek = evaluation_key(evaluator.params(), &sk);
 
     // generate pertinent indices
     let pertinency_message_count = 64;
@@ -110,9 +111,19 @@ fn demo() {
     // pre-processing
     println!("Phase 1 precomputation...");
     let (precomp_hint_a, precomp_hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
-    let precomp_range_constants =
-        precompute_range_constants(&evaluator.params().poly_ctx(&PolyType::Q, 0));
-    let precomp_sub_from_one = sub_from_one_precompute(evaluator.params(), 0);
+
+    #[cfg(feature = "level")]
+    let range_precompute_level = 10;
+
+    #[cfg(not(feature = "level"))]
+    let range_precompute_level = 0;
+
+    let precomp_range_constants = precompute_range_constants(
+        &evaluator
+            .params()
+            .poly_ctx(&PolyType::Q, range_precompute_level),
+    );
+    let precomp_sub_from_one = sub_from_one_precompute(evaluator.params(), range_precompute_level);
 
     // Running phase 1
     println!("Phase 1...");
@@ -124,23 +135,21 @@ fn demo() {
             &precomp_hint_b,
             &precomp_range_constants,
             &precomp_sub_from_one,
-            &phase1_ek,
+            &ek,
             &sk,
             &pvw_sk_cts,
         );
     );
 
-    println!(
-        "phase 1 noise: {}",
-        evaluator.measure_noise(&sk, &phase1_ciphertext)
-    );
-
     // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
-    evaluator.mod_down_level(&mut phase1_ciphertext, 12);
+    let level = 12;
+    evaluator.mod_down_level(&mut phase1_ciphertext, level);
 
-    println!(
-        "phase 1 noise after mod down: {}",
-        evaluator.measure_noise(&sk, &phase1_ciphertext)
+    print_noise!(
+        println!(
+            "phase 1 noise (after mod down): {}",
+            evaluator.measure_noise(&sk, &phase1_ciphertext)
+        );
     );
 
     // Precomp phase 2
@@ -151,17 +160,17 @@ fn demo() {
         evaluator.params().degree,
         &mut rng,
     );
-    let level = 12;
 
     let (pts_32_batch, pts_4_roll, pts_1_roll) =
         phase2_precomputes(&evaluator, evaluator.params().degree, level);
 
     // Phase 2
+    println!("Phase 2...");
     time_it!("Phase 2",
         let (indices_ct, weights_ct) = phase2(
             &evaluator,
             &mut phase1_ciphertext,
-            &phase2_ek,
+            &ek,
             &buckets,
             &weights,
             &payloads,
@@ -230,9 +239,14 @@ fn phase1(
         &sk,
     );
 
-    decrypted_cts.iter().for_each(|ct| {
-        println!("Decrypted Ct noise: {}", evaluator.measure_noise(&sk, ct));
-    });
+    print_noise!(
+        decrypted_cts.iter().enumerate().for_each(|(index, ct)| {
+            println!(
+                "Decrypted Ct {index} noise: {}",
+                evaluator.measure_noise(&sk, ct)
+            );
+        });
+    );
 
     // ranged cts are in coefficient form
     let ranged_cts = range_fn_4_times(
@@ -244,24 +258,25 @@ fn phase1(
         &sk,
     );
 
-    println!(
-        "Ranged ct0 noise: {}",
-        evaluator.measure_noise(sk, &ranged_cts.0 .0)
-    );
-    println!(
-        "Ranged ct0 noise: {}",
-        evaluator.measure_noise(sk, &ranged_cts.0 .1)
-    );
-    println!(
-        "Ranged ct0 noise: {}",
-        evaluator.measure_noise(sk, &ranged_cts.1 .0)
-    );
-    println!(
-        "Ranged ct0 noise: {}",
-        evaluator.measure_noise(sk, &ranged_cts.1 .1)
+    print_noise!(
+        println!(
+            "Ranged cts noise: {} {} {} {}",
+            evaluator.measure_noise(sk, &ranged_cts.0 .0),
+            evaluator.measure_noise(sk, &ranged_cts.0 .1),
+            evaluator.measure_noise(sk, &ranged_cts.1 .0),
+            evaluator.measure_noise(sk, &ranged_cts.1 .1)
+        );
     );
 
     let v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
+
+    print_noise!(
+        println!(
+            "Phase 1 end noise (before mod down): {}",
+            evaluator.measure_noise(sk, &v)
+        );
+    );
+
     v
 }
 
@@ -281,7 +296,7 @@ fn phase2(
     // switch to Evaluation representation for efficient rotations and scalar multiplications
     evaluator.ciphertext_change_representation(pv, Representation::Evaluation);
 
-    let (indices_ct, weights_ct) = phase2::phase2(
+    let (mut indices_ct, mut weights_ct) = phase2::phase2(
         evaluator,
         pv,
         &ek,
@@ -295,6 +310,26 @@ fn phase2(
         sk,
     );
 
+    print_noise!(
+        println!(
+            "Phase 2 end (before mod down noise) - indices_ct:{}, weights_ct:{} ",
+            evaluator.measure_noise(&sk, &indices_ct),
+            evaluator.measure_noise(&sk, &weights_ct)
+        );
+    );
+
+    // mod down to last level
+    evaluator.mod_down_level(&mut indices_ct, 14);
+    evaluator.mod_down_level(&mut weights_ct, 14);
+
+    print_noise!(
+        println!(
+            "Phase 2 end (after mod down noise) - indices_ct:{}, weights_ct:{} ",
+            evaluator.measure_noise(&sk, &indices_ct),
+            evaluator.measure_noise(&sk, &weights_ct)
+        );
+    );
+
     (indices_ct, weights_ct)
 }
 
@@ -306,6 +341,17 @@ fn client_processing(
     buckets: &[Vec<u64>],
     weights: &[Vec<u64>],
 ) -> Vec<Vec<u64>> {
+    print_noise!(
+        println!(
+            "Client's indices_ct noise : {}",
+            evaluator.measure_noise(&sk, &indices_ct)
+        );
+        println!(
+            "Client's weights_ct noise : {}",
+            evaluator.measure_noise(&sk, &weights_ct)
+        );
+    );
+
     // construct lhs
     let pv = pv_decompress(evaluator, indices_ct, sk);
     let lhs = construct_lhs(&pv, buckets, weights, K, GAMMA, evaluator.params().degree);
@@ -338,13 +384,13 @@ fn powers_of_x() {
         let placeholder = Ciphertext::placeholder();
         let mut calculated = vec![placeholder.clone(); 255];
         calculated[0] = ct;
-        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores);
-        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores);
+        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores,&sk);
     );
 }
 

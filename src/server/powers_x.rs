@@ -4,6 +4,8 @@ use bfv::{
 };
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
+use crate::print_noise;
+
 /// Calculates all powers of `x` for range [1,256) using binary exponentiation
 ///
 /// Note: not used anywhere. Here just for testing.
@@ -82,6 +84,7 @@ pub fn evaluate_powers(
     calculated: &mut [Ciphertext],
     bases: bool,
     cores: usize,
+    sk: &SecretKey,
 ) {
     // start is always a power of two. Hence, start-1 equals the mask to extract log2(start) bits
     let mask = start - 1;
@@ -90,6 +93,15 @@ pub fn evaluate_powers(
     if !bases {
         let tmp = evaluator.mul(&calculated[start / 2 - 1], &calculated[start / 2 - 1]);
         calculated[start - 1] = evaluator.relinearize(&tmp, ek);
+
+        if start == 2 || start == 8 || start == 32 || start == 64 {
+            evaluator.mod_down_next(&mut calculated[start - 1]);
+        }
+
+        print_noise!(println!(
+            " base {start} noise: {}",
+            evaluator.measure_noise(&sk, &calculated[start - 1])
+        ););
     }
 
     // To avoid running into borrow issues later, split `calculated` at `start+1` where the second chunk will
@@ -100,11 +112,18 @@ pub fn evaluate_powers(
     let pending = &mut pending[..(end - 1 - start)];
     let size = (pending.len() as f64 / cores as f64).ceil() as usize;
 
+    // mod match
+    let match_level = done.last().unwrap().level();
+    done.par_iter_mut().for_each(|ct| {
+        evaluator.mod_down_level(ct, match_level);
+    });
+
     pending.par_iter_mut().enumerate().for_each(|(index, v)| {
         // calculate real_index for power to figure out which other power to multiply base with.
         // For ex, if real_index = 5 (ie x^5) then we must multiply x^4 with x^1 since x^4 is the base
         // and 1 equals to `5 & mask` (ie 101 & 011 = 1).
         let real_index = index + start + 1;
+
         let tmp = evaluator.mul(done.last().unwrap(), &done[(real_index & mask) - 1]);
         *v = evaluator.relinearize(&tmp, ek);
     });
@@ -151,7 +170,7 @@ mod tests {
             let mut calculated = vec![dummy.clone(); 255];
             calculated[0] = ct.clone();
             for _ in 0..10 {
-                evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
+                evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores, &sk);
             }
         }
 
@@ -165,13 +184,22 @@ mod tests {
             .unwrap();
 
         pool.install(|| {
-            evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores);
-            evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores);
+            evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores, &sk);
+            evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores, &sk);
+            evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores, &sk);
+            evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores, &sk);
+            evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores, &sk);
+            evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores, &sk);
+            evaluate_powers(
+                &evaluator,
+                &ek,
+                128,
+                256,
+                &mut calculated,
+                false,
+                cores,
+                &sk,
+            );
         });
         println!("Time: {:?}", now.elapsed());
 

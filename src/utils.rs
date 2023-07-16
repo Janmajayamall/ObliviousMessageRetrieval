@@ -35,6 +35,30 @@ macro_rules! time_it{
     }
 }
 
+#[macro_export]
+macro_rules! print_noise {
+    ($($block:tt)+) => {
+        #[cfg(feature="noise")]
+        {
+            $(
+                $block
+            )+
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! level_down {
+    ($($block:tt)+) => {
+        #[cfg(feature="level")]
+        {
+            $(
+                $block
+            )+
+        }
+    };
+}
+
 pub fn store_range_coeffs() {
     let prime = 65537;
     let range = 850;
@@ -92,7 +116,7 @@ pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &Sec
 pub fn generate_bfv_parameters() -> BfvParameters {
     let moduli = vec![50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
     let mut params = BfvParameters::new(&moduli, 65537, 1 << 15);
-    params.enable_hybrid_key_switching(&[50, 50, 50]);
+    params.enable_hybrid_key_switching(&[50, 50, 60]);
     params
 }
 
