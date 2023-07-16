@@ -132,7 +132,7 @@ pub fn precompute_indices_pts(
 pub fn compute_weight_pts(
     evaluator: &Evaluator,
     level: usize,
-    payloads: &[Vec<u16>],
+    payloads: &[Vec<u64>],
     min: usize,
     max: usize,
     bucket_size: usize,
@@ -164,7 +164,7 @@ pub fn compute_weight_pts(
                 let bucket_offset = bucket_size * (bucket_index as usize);
 
                 for j in 0..bucket_size {
-                    m[j + bucket_offset] = modq.mul_mod_fast(bucket_weight, payload[j] as u64);
+                    m[j + bucket_offset] = modq.mul_mod_fast(bucket_weight, payload[j]);
                 }
             }
 

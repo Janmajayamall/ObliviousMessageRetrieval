@@ -5,7 +5,10 @@ use bfv::{
 use byteorder::{ByteOrder, LittleEndian};
 use itertools::Itertools;
 use ndarray::Array2;
-use rand::{distributions::Standard, thread_rng, Rng};
+use rand::{
+    distributions::{Standard, Uniform},
+    thread_rng, Rng,
+};
 use std::io::Write;
 
 use crate::MESSAGE_BYTES;
@@ -58,13 +61,13 @@ pub fn precompute_range_constants(ctx: &PolyContext<'_>) -> Array2<u64> {
     Array2::from_shape_vec((65536usize, ctx.moduli_count()), v).unwrap()
 }
 
-pub fn generate_random_payloads(set_size: usize) -> Vec<Vec<u16>> {
+pub fn generate_random_payloads(set_size: usize) -> Vec<Vec<u64>> {
     let rng = thread_rng();
     let mut payloads = Vec::with_capacity(set_size);
     (0..set_size).into_iter().for_each(|_| {
-        let msg: Vec<u16> = rng
+        let msg: Vec<u64> = rng
             .clone()
-            .sample_iter(Standard)
+            .sample_iter(Uniform::new(0, (1 << 16)))
             .take(MESSAGE_BYTES / 2)
             .collect_vec();
         payloads.push(msg);
