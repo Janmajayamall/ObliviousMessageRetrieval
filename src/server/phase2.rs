@@ -318,9 +318,6 @@ pub fn phase2(
     // pertinency vector ciphertext must be in Evaluation representation
     assert!(pv_ct.c_ref()[0].representation() == &Representation::Evaluation);
 
-    // let mut rot_count = 0;
-    dbg!(rayon::current_num_threads());
-
     let num_threads = rayon::current_num_threads() as f64;
     let set_len = (pts_32.len() as f64 / num_threads)
         .ceil()

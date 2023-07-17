@@ -278,6 +278,7 @@ fn phase1(
 
     print_noise!(
         decrypted_cts.iter().enumerate().for_each(|(index, ct)| {
+            dbg!(ct.c_ref()[0].representation());
             println!(
                 "Decrypted Ct {index} noise: {}",
                 evaluator.measure_noise(&sk, ct)
@@ -417,19 +418,17 @@ fn powers_of_x() {
     let pt = evaluator.plaintext_encode(&m, Encoding::default());
     let ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
-    let cores = 1;
-
     time_it!("Powers of x [1,256) time: ",
         let placeholder = Ciphertext::placeholder();
         let mut calculated = vec![placeholder.clone(); 255];
         calculated[0] = ct;
-        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores,&sk);
-        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, cores,&sk);
+        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, &sk);
     );
 }
 
@@ -547,19 +546,19 @@ fn call_range_fn_once() {
 }
 
 fn main() {
-    let threads = 4;
+    let threads = 8;
     // set global thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
         .unwrap();
-    // demo();
+    demo();
     // print_detection_key_size();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();
 
     // powers_of_x();
-    call_range_fn_once();
+    // call_range_fn_once();
 
     // range_fn_trial();
 }

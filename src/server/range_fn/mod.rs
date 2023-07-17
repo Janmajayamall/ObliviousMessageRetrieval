@@ -105,8 +105,6 @@ pub fn range_fn(
 ) -> Ciphertext {
     let placeholder = Ciphertext::new(vec![], PolyType::Q, 0);
 
-    let cores = 1;
-
     // Calculate base powers for k_powers. There's no harm in doing this here since
     // evaluate_powers calculates base powers serially as well.
     // The intention with doing this here is to evaluate k_powers and m_powers in parallel using `join`.
@@ -170,21 +168,21 @@ pub fn range_fn(
             // For example, all even numbers in range [1,256] can be obtained by multiplying all values in
             // range [1,128] by 2. Thus to calculate only even powers in range [0, 256] we calculate all powers
             // of `a` in range [1,128] where `a=x^2`.
-            evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, cores, sk);
-            evaluate_powers(evaluator, ek, 4, 8, &mut k_powers, true, cores, sk);
-            evaluate_powers(evaluator, ek, 8, 16, &mut k_powers, true, cores, sk);
-            evaluate_powers(evaluator, ek, 16, 32, &mut k_powers, true, cores, sk);
-            evaluate_powers(evaluator, ek, 32, 64, &mut k_powers, true, cores, sk);
-            evaluate_powers(evaluator, ek, 64, 128, &mut k_powers, true, cores, sk);
+            evaluate_powers(evaluator, ek, 2, 4, &mut k_powers, true, sk);
+            evaluate_powers(evaluator, ek, 4, 8, &mut k_powers, true, sk);
+            evaluate_powers(evaluator, ek, 8, 16, &mut k_powers, true, sk);
+            evaluate_powers(evaluator, ek, 16, 32, &mut k_powers, true, sk);
+            evaluate_powers(evaluator, ek, 32, 64, &mut k_powers, true, sk);
+            evaluate_powers(evaluator, ek, 64, 128, &mut k_powers, true, sk);
         },
         || {
-            evaluate_powers(evaluator, ek, 2, 4, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 4, 8, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 8, 16, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 16, 32, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 32, 64, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 64, 128, &mut m_powers, false, cores, sk);
-            evaluate_powers(evaluator, ek, 128, 256, &mut m_powers, false, cores, sk);
+            evaluate_powers(evaluator, ek, 2, 4, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 4, 8, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 8, 16, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 16, 32, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 32, 64, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 64, 128, &mut m_powers, false, sk);
+            evaluate_powers(evaluator, ek, 128, 256, &mut m_powers, false, sk);
         },
     );
 
@@ -392,6 +390,8 @@ mod tests {
         let evaluator = Evaluator::new(params);
         let pt = evaluator.plaintext_encode(&m, Encoding::simd(0));
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
         unsafe { evaluator.add_noise(&mut ct, 40) };
         dbg!(evaluator.measure_noise(&sk, &ct));

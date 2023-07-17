@@ -83,7 +83,6 @@ pub fn evaluate_powers(
     end: usize,
     calculated: &mut [Ciphertext],
     bases: bool,
-    cores: usize,
     sk: &SecretKey,
 ) {
     // start is always a power of two. Hence, start-1 equals the mask to extract log2(start) bits
@@ -110,7 +109,6 @@ pub fn evaluate_powers(
 
     // Since we only need to calculate for range [start+1, end-1], slice off the rest
     let pending = &mut pending[..(end - 1 - start)];
-    let size = (pending.len() as f64 / cores as f64).ceil() as usize;
 
     level_down!(
         // mod match
@@ -172,7 +170,7 @@ mod tests {
             let mut calculated = vec![dummy.clone(); 255];
             calculated[0] = ct.clone();
             for _ in 0..10 {
-                evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores, &sk);
+                evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, &sk);
             }
         }
 
@@ -186,22 +184,13 @@ mod tests {
             .unwrap();
 
         pool.install(|| {
-            evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, cores, &sk);
-            evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, cores, &sk);
-            evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, cores, &sk);
-            evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, cores, &sk);
-            evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, cores, &sk);
-            evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, cores, &sk);
-            evaluate_powers(
-                &evaluator,
-                &ek,
-                128,
-                256,
-                &mut calculated,
-                false,
-                cores,
-                &sk,
-            );
+            evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, &sk);
+            evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, &sk);
         });
         println!("Time: {:?}", now.elapsed());
 
