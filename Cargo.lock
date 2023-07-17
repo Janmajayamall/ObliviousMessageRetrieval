@@ -820,6 +820,7 @@ version = "0.1.0"
 dependencies = [
  "bfv",
  "byteorder",
+ "bytes",
  "criterion",
  "hexl-rs",
  "itertools",
@@ -833,6 +834,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "statrs",
+ "walkdir",
 ]
 
 [[package]]

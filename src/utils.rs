@@ -1,17 +1,27 @@
 use bfv::{
     BfvParameters, Ciphertext, Encoding, Evaluator, Modulus, PolyContext, RelinearizationKey,
-    SecretKey,
+    SecretKey, TryFromWithParameters,
 };
 use byteorder::{ByteOrder, LittleEndian};
+use bytes::Bytes;
 use itertools::Itertools;
 use ndarray::Array2;
+use prost::Message;
 use rand::{
     distributions::{Standard, Uniform},
     thread_rng, Rng,
 };
-use std::io::Write;
+use rayon::vec;
+use std::{
+    io::{BufReader, Read, Write},
+    path::{Path, PathBuf},
+};
+use walkdir::WalkDir;
 
-use crate::MESSAGE_BYTES;
+use crate::{
+    pvw::{PvwCiphertext, PvwCiphertextProto, PvwParameters, PvwPublicKey, PvwSecretKey},
+    MESSAGE_BYTES,
+};
 
 pub fn read_range_coeffs() -> Vec<u64> {
     let bytes = include_bytes!("../target/params_850.bin");
@@ -120,7 +130,121 @@ pub fn generate_bfv_parameters() -> BfvParameters {
     params
 }
 
+/// Generates random clues using a single public key.
+fn generate_random_clues(pvw_params: &PvwParameters, set_size: usize) -> Vec<PvwCiphertext> {
+    let mut rng = thread_rng();
+    let random_sk = PvwSecretKey::random(pvw_params, &mut rng);
+    let pk = random_sk.public_key(&mut rng);
+
+    let clues = (0..set_size)
+        .into_iter()
+        .map(|_| pk.encrypt(&[0, 0, 0, 0], &mut rng))
+        .collect_vec();
+
+    clues
+}
+
+fn store_clues(clues: &[PvwCiphertext], params: &PvwParameters) {
+    let output_dir = Path::new("./data/clues");
+    std::fs::create_dir_all("./data/clues").expect("Create clue directory failed");
+
+    clues.iter().enumerate().for_each(|(index, c)| {
+        let bytes = PvwCiphertextProto::try_from_with_parameters(c, params).encode_to_vec();
+        let mut clue_path = PathBuf::from(output_dir);
+        clue_path.push(format!("{index}.bin"));
+
+        let mut f = std::fs::File::create(clue_path).expect("Couldn't create clue file");
+        f.write_all(&bytes)
+            .expect("Couldn't write bytes to clue file");
+    });
+}
+
+fn read_clues(params: &PvwParameters) -> Vec<PvwCiphertext> {
+    let paths = std::fs::read_dir("./data/clues").expect("data/clue directory not found");
+    let mut cts = vec![];
+    paths.into_iter().for_each(|path| {
+        let path = path.unwrap();
+
+        if path.file_type().unwrap().is_file() {
+            let file = std::fs::read(path.path())
+                .expect(&format!("Unable to open file at {:?}", path.path()));
+            let bytes = Bytes::from(file);
+            let proto = PvwCiphertextProto::decode(bytes)
+                .expect(&format!("Invalid clue file {:?}", path.path()));
+            let ct = PvwCiphertext::try_from_with_parameters(&proto, params);
+            cts.push(ct);
+        }
+    });
+    cts
+}
+
+/// If random clues have been generated and stored under ./data/clues then the function
+/// reads them, otherwise generates new random clues and store them under ./data/clues
+/// taking significantly longer time. Once random clues have either been read or generated
+/// the function generates new pertinent clues for `pk` and places them at specific indices
+/// in `clues` vector according to `pertinency_indices`.
+pub fn prepare_clues_for_demo(
+    pvw_params: &PvwParameters,
+    pk: &PvwPublicKey,
+    pertinent_indices: &[usize],
+    set_size: usize,
+) -> Vec<PvwCiphertext> {
+    let clue_dir = Path::new("./data/clues");
+    // std::fs::read_dir(clue_dir).expect(&format!("Cannot open {}", clue_dir.to_str().unwrap())).si;
+    let mut clues = vec![];
+    if WalkDir::new(clue_dir).into_iter().count() != set_size {
+        println!("/data/clues not found. Generating random clues...");
+        time_it!("Generate random clues",
+        clues = generate_random_clues(pvw_params, set_size););
+        // store clues for later
+        store_clues(&clues, pvw_params);
+    } else {
+        println!("Reading clues stored under /data/clues...");
+        clues = read_clues(pvw_params);
+    }
+
+    // generate pertinent clues and place them at pertinent indices
+    let mut rng = thread_rng();
+    pertinent_indices.iter().for_each(|i| {
+        clues[*i] = pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    });
+
+    clues
+}
+
+/// All non pertinent clues are clone of a single clues generated under a random public key.
+/// All pertinent clues are generated fresh using `pvw_pk`. Only used for testing purposes.
+fn generate_clues_fast(
+    pvw_pk: &PvwPublicKey,
+    pvw_params: &PvwParameters,
+    pertinent_indices: &[usize],
+    count: usize,
+) -> Vec<PvwCiphertext> {
+    let mut rng = thread_rng();
+
+    let other_pvw_sk = PvwSecretKey::random(pvw_params, &mut rng);
+    let other_pvw_pk = other_pvw_sk.public_key(&mut rng);
+    let non_peritnent_clue = other_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+
+    // generate hints
+    let partinent_clue = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..count)
+        .into_iter()
+        .map(|i| {
+            if pertinent_indices.contains(&i) {
+                partinent_clue.clone()
+            } else {
+                non_peritnent_clue.clone()
+            }
+        })
+        .collect_vec();
+
+    clues
+}
+
 mod tests {
+    use std::collections::HashSet;
+
     use bfv::Modulus;
 
     use super::*;
@@ -128,6 +252,14 @@ mod tests {
     #[test]
     fn test_store_range_coeffs() {
         store_range_coeffs();
+    }
+
+    #[test]
+    fn generate_and_store_random_clues() {
+        let pvw_params = PvwParameters::default();
+        let mut clues = generate_random_clues(&pvw_params, 2);
+        store_clues(&clues, &pvw_params);
+        let mut clues_back = read_clues(&pvw_params);
     }
 
     #[test]

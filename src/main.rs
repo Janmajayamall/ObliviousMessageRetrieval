@@ -13,6 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     f32::consts::E,
     hash::Hash,
+    io::Write,
     os::unix::thread,
     sync::Arc,
 };
@@ -35,37 +36,12 @@ use omr::{
         range_fn::{range_fn, range_fn_4_times},
     },
     time_it,
-    utils::{generate_bfv_parameters, generate_random_payloads, precompute_range_constants},
+    utils::{
+        generate_bfv_parameters, generate_random_payloads, precompute_range_constants,
+        prepare_clues_for_demo,
+    },
     BUCKET_SIZE, GAMMA, K,
 };
-
-fn generate_clues(
-    pvw_pk: &PvwPublicKey,
-    pvw_params: &PvwParameters,
-    pertinent_indices: &[usize],
-    count: usize,
-) -> Vec<PvwCiphertext> {
-    let mut rng = thread_rng();
-
-    let other_pvw_sk = PvwSecretKey::random(pvw_params, &mut rng);
-    let other_pvw_pk = other_pvw_sk.public_key(&mut rng);
-    let non_peritnent_clue = other_pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
-
-    // generate hints
-    let partinent_clue = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
-    let clues = (0..count)
-        .into_iter()
-        .map(|i| {
-            if pertinent_indices.contains(&i) {
-                partinent_clue.clone()
-            } else {
-                non_peritnent_clue.clone()
-            }
-        })
-        .collect_vec();
-
-    clues
-}
 
 fn print_detection_key_size() {
     let mut rng = thread_rng();
@@ -133,9 +109,15 @@ fn demo() {
     pertinent_indices.sort();
 
     // generate clues and payloads
-    let clues = generate_clues(
-        &pvw_pk,
+    // let clues = generate_clues(
+    //     &pvw_pk,
+    //     &pvw_params,
+    //     &pertinent_indices,
+    //     evaluator.params().degree,
+    // );
+    let clues = prepare_clues_for_demo(
         &pvw_params,
+        &pvw_pk,
         &pertinent_indices,
         evaluator.params().degree,
     );
