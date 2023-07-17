@@ -11,12 +11,15 @@ use rand::{
     distributions::{Standard, Uniform},
     thread_rng, Rng,
 };
-use rayon::vec;
+use rayon::{
+    prelude::{IndexedParallelIterator, IntoParallelIterator, ParallelBridge, ParallelIterator},
+    vec,
+};
 use std::{
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
 };
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 use crate::{
     pvw::{PvwCiphertext, PvwCiphertextProto, PvwParameters, PvwPublicKey, PvwSecretKey},
@@ -136,10 +139,14 @@ fn generate_random_clues(pvw_params: &PvwParameters, set_size: usize) -> Vec<Pvw
     let random_sk = PvwSecretKey::random(pvw_params, &mut rng);
     let pk = random_sk.public_key(&mut rng);
 
-    let clues = (0..set_size)
-        .into_iter()
-        .map(|_| pk.encrypt(&[0, 0, 0, 0], &mut rng))
-        .collect_vec();
+    let mut clues = vec![];
+    (0..set_size)
+        .into_par_iter()
+        .map(|_| {
+            let mut rng = thread_rng();
+            pk.encrypt(&[0, 0, 0, 0], &mut rng)
+        })
+        .collect_into_vec(&mut clues);
 
     clues
 }
@@ -178,6 +185,15 @@ fn read_clues(params: &PvwParameters) -> Vec<PvwCiphertext> {
     cts
 }
 
+fn is_bin(entry: &Result<walkdir::DirEntry, walkdir::Error>) -> bool {
+    entry.as_ref().map_or(false, |c| {
+        c.file_name()
+            .to_str()
+            .map(|s| s.contains(".bin"))
+            .unwrap_or(false)
+    })
+}
+
 /// If random clues have been generated and stored under ./data/clues then the function
 /// reads them, otherwise generates new random clues and store them under ./data/clues
 /// taking significantly longer time. Once random clues have either been read or generated
@@ -192,7 +208,8 @@ pub fn prepare_clues_for_demo(
     let clue_dir = Path::new("./data/clues");
     // std::fs::read_dir(clue_dir).expect(&format!("Cannot open {}", clue_dir.to_str().unwrap())).si;
     let mut clues = vec![];
-    if WalkDir::new(clue_dir).into_iter().count() != set_size {
+
+    if WalkDir::new(clue_dir).into_iter().filter(is_bin).count() < set_size {
         println!("/data/clues not found. Generating random clues...");
         time_it!("Generate random clues",
         clues = generate_random_clues(pvw_params, set_size););
@@ -201,9 +218,11 @@ pub fn prepare_clues_for_demo(
     } else {
         println!("Reading clues stored under /data/clues...");
         clues = read_clues(pvw_params);
+        clues.truncate(set_size);
     }
 
     // generate pertinent clues and place them at pertinent indices
+    println!("Generating pertinent clues...");
     let mut rng = thread_rng();
     pertinent_indices.iter().for_each(|i| {
         clues[*i] = pk.encrypt(&[0, 0, 0, 0], &mut rng);

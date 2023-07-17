@@ -4,7 +4,7 @@ use bfv::{
 };
 use rayon::prelude::{IndexedParallelIterator, IntoParallelRefMutIterator, ParallelIterator};
 
-use crate::print_noise;
+use crate::{level_down, print_noise};
 
 /// Calculates all powers of `x` for range [1,256) using binary exponentiation
 ///
@@ -94,9 +94,9 @@ pub fn evaluate_powers(
         let tmp = evaluator.mul(&calculated[start / 2 - 1], &calculated[start / 2 - 1]);
         calculated[start - 1] = evaluator.relinearize(&tmp, ek);
 
-        if start == 2 || start == 8 || start == 32 || start == 64 {
+        level_down!(if start == 2 || start == 8 || start == 32 || start == 64 {
             evaluator.mod_down_next(&mut calculated[start - 1]);
-        }
+        });
 
         print_noise!(println!(
             " base {start} noise: {}",
@@ -112,11 +112,13 @@ pub fn evaluate_powers(
     let pending = &mut pending[..(end - 1 - start)];
     let size = (pending.len() as f64 / cores as f64).ceil() as usize;
 
-    // mod match
-    let match_level = done.last().unwrap().level();
-    done.par_iter_mut().for_each(|ct| {
-        evaluator.mod_down_level(ct, match_level);
-    });
+    level_down!(
+        // mod match
+        let match_level = done.last().unwrap().level();
+        done.par_iter_mut().for_each(|ct| {
+            evaluator.mod_down_level(ct, match_level);
+        });
+    );
 
     pending.par_iter_mut().enumerate().for_each(|(index, v)| {
         // calculate real_index for power to figure out which other power to multiply base with.

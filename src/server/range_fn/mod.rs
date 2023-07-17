@@ -267,6 +267,7 @@ pub fn range_fn(
 /// Helper function to call range_fn 4 times with multiple threads.
 /// Creates and installs thread pools for each range_fn such that
 /// global thread pool is distributed equally among the 4 range_fn calls.
+/// Assumes that total_threads is power of 2.
 pub fn range_fn_4_times(
     decrypted_cts: &[Ciphertext],
     evaluator: &Evaluator,
@@ -275,44 +276,79 @@ pub fn range_fn_4_times(
     sub_from_one_precompute: &[u64],
     sk: &SecretKey,
 ) -> ((Ciphertext, Ciphertext), (Ciphertext, Ciphertext)) {
-    let threads = (rayon::current_num_threads() as f64 / 4.0).ceil() as usize;
+    // We assume that total no of threads is power of two
+    let total_threads = rayon::current_num_threads();
 
-    macro_rules! install_pool_and_call_range_fn {
-        ($index:literal) => {{
-            let pool = rayon::ThreadPoolBuilder::new()
-                .num_threads(threads)
-                .build()
-                .unwrap();
-
-            pool.install(|| {
-                // println!("Running {} with {threads} threads...", $index);
-                range_fn(
-                    &decrypted_cts[$index],
-                    evaluator,
-                    ek,
-                    constants,
-                    sub_from_one_precompute,
-                    sk,
-                )
-            })
-        }};
+    macro_rules! call_range {
+        ($index:literal) => {
+            range_fn(
+                &decrypted_cts[$index],
+                evaluator,
+                ek,
+                constants,
+                sub_from_one_precompute,
+                sk,
+            )
+        };
     }
-    let ranged_cts = rayon::join(
-        || {
-            rayon::join(
-                || install_pool_and_call_range_fn!(0),
-                || install_pool_and_call_range_fn!(1),
-            )
-        },
-        || {
-            rayon::join(
-                || install_pool_and_call_range_fn!(2),
-                || install_pool_and_call_range_fn!(3),
-            )
-        },
-    );
 
-    ranged_cts
+    if total_threads == 1 {
+        // there's only 1 thread. Process all 4 calls serially.
+        let ranged_cts = (
+            (call_range!(0), call_range!(1)),
+            (call_range!(2), call_range!(3)),
+        );
+        return ranged_cts;
+    } else {
+        // Divide all threads among 4 range_fn calls. Assuming total_threads is power of 2, `threads_by_4`
+        // will be >= 1 whenever total_threads != 2. When thread_by_4 >= 1 we can easily assign `threads_by_4` threads
+        // to each of the 4 range_fn calls and process them in parallel. When thread_by_4 == 0 (ie total_thread = 2)
+        // we need to group two range_fn calls together and assign a single thread to each of the two group.
+        let threads_by_4 = total_threads / 4;
+        // As explained, threads to install will be 1 if there are only 2 threads in total and 4 range_fn calls
+        // are grouped into 2 of 2. Otherwise install as many as `threads_by_4` threads.
+        let threads = if threads_by_4 == 0 { 1 } else { threads_by_4 };
+
+        macro_rules! install_pool_and_call_range_fn {
+            ($block:tt) => {{
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .unwrap();
+
+                pool.install(|| {
+                    // println!("Running {} with {threads} threads...", $index);
+                    $block
+                })
+            }};
+        }
+
+        let ranged_cts = if threads_by_4 == 0 {
+            // case when total_threads = 2
+            rayon::join(
+                || install_pool_and_call_range_fn!((call_range!(0), call_range!(1))),
+                || install_pool_and_call_range_fn!((call_range!(2), call_range!(3))),
+            )
+        } else {
+            // case when total_threads >= 4
+            rayon::join(
+                || {
+                    rayon::join(
+                        || install_pool_and_call_range_fn!({ call_range!(0) }),
+                        || install_pool_and_call_range_fn!({ call_range!(1) }),
+                    )
+                },
+                || {
+                    rayon::join(
+                        || install_pool_and_call_range_fn!({ call_range!(2) }),
+                        || install_pool_and_call_range_fn!({ call_range!(3) }),
+                    )
+                },
+            )
+        };
+
+        return ranged_cts;
+    }
 }
 
 #[cfg(test)]

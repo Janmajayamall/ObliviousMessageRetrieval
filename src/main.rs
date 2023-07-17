@@ -23,6 +23,7 @@ use omr::{
         construct_lhs, construct_rhs, encrypt_pvw_sk, evaluation_key, gen_pv_exapnd_rtgs,
         pv_decompress, solve_equations,
     },
+    level_down,
     optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
     plaintext,
     preprocessing::{assign_buckets_and_weights, pre_process_batch},
@@ -58,8 +59,14 @@ fn print_detection_key_size() {
     let evaluator = Evaluator::new(params);
 
     // Client's detection keys
-    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+    let mut pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
     let ek = evaluation_key(evaluator.params(), &sk);
+
+    // change representation of pvw_sk_cts from Evaluation to Coefficient due the possibility that we might
+    // use different NTT backends in future
+    pvw_sk_cts.iter_mut().for_each(|c| {
+        evaluator.ciphertext_change_representation(c, Representation::Coefficient);
+    });
 
     let mut bytes = 0;
     pvw_sk_cts.iter().for_each(|c| {
@@ -75,6 +82,10 @@ fn print_detection_key_size() {
 }
 
 fn demo() {
+    if !rayon::current_num_threads().is_power_of_two() {
+        println!("WARNING: Threads available is not a power of 2. Program isn't capable of fully utilising all cores if total cores are not a power of 2. Moreover, program might panic!");
+    }
+
     let mut rng = thread_rng();
 
     let params = generate_bfv_parameters();
@@ -127,6 +138,14 @@ fn demo() {
     println!("Phase 1 precomputation...");
     let (precomp_hint_a, precomp_hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
 
+    #[cfg(feature = "precomp_pvw")]
+    let pvw_decrypt_precompute = {
+        if rayon::current_num_threads() < 8 {
+            panic!("Feature `precomp_pvw` does not support threads < 8");
+        }
+        pvw_setup(&evaluator, &ek, &pvw_sk_cts)
+    };
+
     #[cfg(feature = "level")]
     let range_precompute_level = 10;
 
@@ -152,7 +171,10 @@ fn demo() {
             &precomp_sub_from_one,
             &ek,
             &sk,
+            #[cfg(not(feature = "precomp_pvw"))]
             &pvw_sk_cts,
+            #[cfg(feature = "precomp_pvw")]
+            &pvw_decrypt_precompute
         );
     );
 
@@ -333,9 +355,11 @@ fn phase2(
         );
     );
 
-    // mod down to last level
-    evaluator.mod_down_level(&mut indices_ct, 14);
-    evaluator.mod_down_level(&mut weights_ct, 14);
+    level_down!(
+        // mod down to last level
+        evaluator.mod_down_level(&mut indices_ct, 14);
+        evaluator.mod_down_level(&mut weights_ct, 14);
+    );
 
     print_noise!(
         println!(
@@ -512,25 +536,30 @@ fn call_range_fn_once() {
     // gen evaluation key
     let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
 
-    time_it!("Range fn time: ",
-        let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    // time_it!("Range fn time: ",
+    //     let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    // );
+
+    let cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
+    time_it!("Range fn 4 times: ",
+        let _ = range_fn_4_times(&cts, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
     );
 }
 
 fn main() {
-    let threads = 8;
+    let threads = 4;
     // set global thread pool
     rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global()
         .unwrap();
     // demo();
-    print_detection_key_size();
+    // print_detection_key_size();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();
 
     // powers_of_x();
-    // call_range_fn_once();
+    call_range_fn_once();
 
     // range_fn_trial();
 }

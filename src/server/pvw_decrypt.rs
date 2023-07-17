@@ -27,8 +27,9 @@ pub fn pvw_setup(
     ek: &EvaluationKey,
     pvw_sk_cts: &[Ciphertext],
 ) -> Vec<Vec<Ciphertext>> {
-    // assumes that 4 | threads
+    // assumes that threads % 4=0
     let threads = rayon::current_num_threads();
+    assert!(threads % 4 == 0);
     // pvw decrypt is called 4 times with different ciphertexts. Thus, we first assign total no. of threads
     // equally among all 4 calls before dividing them further for rotations within each call.
     let threads_by_4 = threads as f64 / 4.0;
@@ -44,6 +45,10 @@ pub fn pvw_setup(
 
     let mut checkpoint_cts = vec![vec![]; 4];
     let mut cts = pvw_sk_cts.to_vec();
+
+    // verify all cts are in Evaluation representation for efficient rotations and plaintext multiplication in pvw_decrypt
+    cts.iter()
+        .for_each(|c| assert!(c.c_ref()[0].representation() == &Representation::Evaluation));
 
     for j in 0..threads_by_4 as usize {
         // Checkpoints for each thread are cts rotated by j*rots_per_thread.
@@ -130,6 +135,8 @@ pub fn pvw_decrypt(
     pvw_sk_cts
         .into_par_iter()
         .map(|s_ct| {
+            // s_ct must be in Evaluation for efficient rotations and plaintext multiplication
+            assert!(s_ct.c_ref()[0].representation() == &Representation::Evaluation);
             optimised_pvw_fma_with_rot_and_reduction(
                 evaluator.params(),
                 s_ct,
@@ -159,14 +166,14 @@ fn add_array_u128(a: &mut Array2<u128>, b: &Array2<u128>) {
 /// Assigns precomputed sk_cts and corresponding hint_a_pts to available threads.
 ///
 /// Recursively calls itself until it narrows down to a single start index. After which it calls
-/// `optimised_pvw_fma_with_rot` for sk_ct with correspoding slice of hint_a_pts. Correspondence is
+/// `optimised_pvw_fma_with_rot` for sk_ct with corresponding slice of hint_a_pts. Correspondence is
 /// determined by the index of sk_ct, which infact means the number of times it has been rotated during pre-computation. For ex,
 /// the sk_ct at position 1 must be matched with slice chunk of hint_a_pts offset by `rots_per_thread*1` since
 /// first `rots_per_thread` pts are for sk_ct at position 0.
 ///
 /// Takes care of the case when available threads (ie threads_by_4) does not divide 512 (ie total no. of rotations).
 /// For ex, when threads_by_4 = 11, it means there will be 45 rotations on first 10 threads and 62 rotations
-/// on the last thread.
+/// on the last thread. (Note: no need to handle case threads_by_4%2 !=0 anymore)
 fn thread_helper(
     size: usize,
     params: &BfvParameters,
@@ -210,6 +217,7 @@ pub fn pvw_decrypt_precomputed(
     assert!(precomputed_pvw_sk_cts.len() == pvw_params.ell);
 
     let threads = rayon::current_num_threads();
+    assert!(threads % 4 == 0);
     let threads_by_4 = threads / 4;
     // Validate that number of checkpoints are equals disbuted among all threads_by_4.
     // This means precomputed rotations of sk_ct must be equal to threads_by_4.
@@ -237,7 +245,6 @@ pub fn pvw_decrypt_precomputed(
                     rtg,
                     sk,
                 );
-
                 coefficient_u128_to_ciphertext(evaluator.params(), &d0, &d1, 0)
             })
         })
