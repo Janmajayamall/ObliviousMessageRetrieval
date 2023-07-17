@@ -1,0 +1,6 @@
+syntax = "proto3";
+
+message PvwCiphertext { 
+    bytes b = 1;
+    bytes a = 2;
+}

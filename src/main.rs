@@ -1,9 +1,11 @@
 use bfv::{
-    BfvParameters, Ciphertext, Encoding, EvaluationKey, Evaluator, GaloisKey, Modulus, Plaintext,
-    Poly, PolyType, RelinearizationKey, Representation, SecretKey,
+    BfvParameters, Ciphertext, CiphertextProto, Encoding, EvaluationKey, EvaluationKeyProto,
+    Evaluator, GaloisKey, Modulus, Plaintext, Poly, PolyType, RelinearizationKey, Representation,
+    SecretKey, TryFromWithParameters,
 };
 use itertools::{izip, Itertools};
 use ndarray::Array2;
+use prost::Message;
 use rand::{thread_rng, Rng};
 use rayon::slice::ParallelSliceMut;
 use std::{
@@ -24,7 +26,7 @@ use omr::{
     plaintext,
     preprocessing::{assign_buckets_and_weights, pre_process_batch},
     print_noise,
-    pvw::*,
+    pvw::{self, *},
     server::{
         mul_and_reduce_ranged_cts_to_1,
         phase2::{self, phase2_precomputes},
@@ -65,13 +67,44 @@ fn generate_clues(
     clues
 }
 
+fn print_detection_key_size() {
+    let mut rng = thread_rng();
+
+    let params = generate_bfv_parameters();
+
+    // Client's PVW keys
+    let pvw_params = PvwParameters::default();
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+
+    // Client's BFV keys
+    let sk = SecretKey::random(params.degree, &mut rng);
+
+    let evaluator = Evaluator::new(params);
+
+    // Client's detection keys
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+    let ek = evaluation_key(evaluator.params(), &sk);
+
+    let mut bytes = 0;
+    pvw_sk_cts.iter().for_each(|c| {
+        let proto = CiphertextProto::try_from_with_parameters(c, evaluator.params());
+        bytes += proto.encode_to_vec().len();
+    });
+
+    bytes += EvaluationKeyProto::try_from_with_parameters(&ek, evaluator.params())
+        .encode_to_vec()
+        .len();
+
+    println!("Detection Key Size: {bytes} bytes");
+}
+
 fn demo() {
     let mut rng = thread_rng();
 
     let params = generate_bfv_parameters();
 
     // Client's PVW keys
-    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_params = PvwParameters::default();
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
@@ -509,7 +542,8 @@ fn main() {
         .num_threads(threads)
         .build_global()
         .unwrap();
-    demo();
+    // demo();
+    print_detection_key_size();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();
 

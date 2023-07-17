@@ -5,7 +5,7 @@ use rand_chacha::ChaCha8Rng;
 use std::sync::Arc;
 
 pub fn pre_process_batch(
-    pvw_params: &Arc<PvwParameters>,
+    pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hints: &[PvwCiphertext],
 ) -> (Vec<Plaintext>, Vec<Poly>) {

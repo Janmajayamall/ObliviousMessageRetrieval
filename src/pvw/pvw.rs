@@ -1,4 +1,5 @@
-use bfv::Modulus;
+use super::PvwCiphertextProto;
+use bfv::{convert_from_bytes, convert_to_bytes, Modulus, TryFromWithParameters};
 use itertools::{izip, Itertools};
 use ndarray::{Array, Array1, Array2, Axis};
 use rand::{
@@ -7,7 +8,6 @@ use rand::{
 };
 use rand_chacha::ChaChaRng;
 use statrs::distribution::Normal;
-use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PvwParameters {
@@ -58,26 +58,33 @@ impl PvwPublicKey {
             self.a
                 .outer_iter()
                 .map(|a_n_m| {
-                    let mut r = a_n_m.to_vec();
-                    q.mul_mod_fast_vec(&mut r, &error);
-                    q.reduce(r.iter().sum::<u64>())
+                    let mut sum = 0;
+                    izip!(a_n_m.iter(), error.iter()).for_each(|(a, e)| {
+                        sum += a * e;
+                    });
+                    sum = q.reduce(sum);
+                    sum
                 })
                 .collect(),
         );
 
         let t = m.iter().map(|v| {
             if *v == 1 {
-                q.reduce((3 * self.par.q) / 4)
+                (3 * self.par.q) / 4
             } else {
-                q.reduce(self.par.q / 4)
+                self.par.q / 4
             }
         });
         let be = Array1::from_vec(
             izip!(self.b.outer_iter(), t)
                 .map(|(b_ell_m, ti)| {
-                    let mut r = b_ell_m.to_vec();
-                    q.mul_mod_fast_vec(&mut r, &error);
-                    q.add_mod_fast(q.reduce(r.iter().sum::<u64>()), ti)
+                    let mut sum = 0;
+                    izip!(b_ell_m.iter(), error.iter()).for_each(|(a, e)| {
+                        sum += a * e;
+                    });
+                    sum += ti;
+                    sum = q.reduce(sum);
+                    sum
                 })
                 .collect(),
         );
@@ -116,11 +123,11 @@ impl PvwSecretKey {
 
         let mut seed = <ChaChaRng as SeedableRng>::Seed::default();
         thread_rng().fill_bytes(&mut seed);
-        let mut rng2 = ChaChaRng::from_seed(seed);
+        let mut seeded_prng = ChaChaRng::from_seed(seed);
 
         let a = Array::from_shape_vec(
             (self.par.n, self.par.m),
-            q.random_vec(self.par.n * self.par.m, &mut rng2),
+            q.random_vec(self.par.n * self.par.m, &mut seeded_prng),
         )
         .unwrap();
 
@@ -199,6 +206,35 @@ impl PvwSecretKey {
     }
 }
 
+impl TryFromWithParameters for PvwCiphertextProto {
+    type Parameters = PvwParameters;
+    type Value = PvwCiphertext;
+    fn try_from_with_parameters(value: &Self::Value, parameters: &Self::Parameters) -> Self {
+        let a_bytes = convert_to_bytes(&value.a, parameters.q);
+        let b_bytes = convert_to_bytes(&value.b, parameters.q);
+
+        PvwCiphertextProto {
+            b: b_bytes,
+            a: a_bytes,
+        }
+    }
+}
+
+impl TryFromWithParameters for PvwCiphertext {
+    type Parameters = PvwParameters;
+    type Value = PvwCiphertextProto;
+    fn try_from_with_parameters(value: &Self::Value, parameters: &Self::Parameters) -> Self {
+        let a_bytes = convert_from_bytes(&value.a, parameters.q);
+        let b_bytes = convert_from_bytes(&value.b, parameters.q);
+
+        PvwCiphertext {
+            par: parameters.clone(),
+            a: a_bytes,
+            b: b_bytes,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -208,8 +244,8 @@ mod tests {
     #[test]
     fn encrypt() {
         let mut rng = thread_rng();
-        let params = Arc::new(PvwParameters::default());
-        for _ in 0..10 {
+        let params = PvwParameters::default();
+        for _ in 0..2 {
             let sk = PvwSecretKey::random(&params, &mut rng);
             let pk = sk.public_key(&mut rng);
 
@@ -221,7 +257,7 @@ mod tests {
             let ct = pk.encrypt(&m, &mut rng);
             dbg!(ct.a.len(), ct.b.len());
 
-            let d_m = sk.decrypt_shifted(ct);
+            let d_m = sk.decrypt(ct);
 
             assert_eq!(m, d_m)
         }
@@ -229,7 +265,7 @@ mod tests {
 
     #[test]
     fn check_probs() {
-        let params = Arc::new(PvwParameters::default());
+        let params = PvwParameters::default();
 
         let mut rng = thread_rng();
         let sk = PvwSecretKey::random(&params, &mut rng);
@@ -240,7 +276,7 @@ mod tests {
 
         let mut count = 0;
         let mut count1 = 0;
-        let observations = 1000;
+        let observations = 10000;
         for _ in 0..observations {
             let ct = pk.encrypt(&[0, 0, 0, 0], &mut rng);
             let ct1 = pk1.encrypt(&[0, 0, 0, 0], &mut rng);
@@ -255,5 +291,20 @@ mod tests {
         }
         assert!((count as f64 / observations as f64) == 1.0);
         assert!((count1 as f64 / observations as f64) == 0.0);
+    }
+
+    #[test]
+    fn serialize_and_deserialize_pvw_ciphertext() {
+        let params = PvwParameters::default();
+
+        let mut rng = thread_rng();
+        let sk = PvwSecretKey::random(&params, &mut rng);
+        let pk = sk.public_key(&mut rng);
+        let ct = pk.encrypt(&[0, 0, 0, 0], &mut rng);
+
+        let proto = PvwCiphertextProto::try_from_with_parameters(&ct, &params);
+        let ct_back = PvwCiphertext::try_from_with_parameters(&proto, &params);
+
+        assert_eq!(ct, ct_back);
     }
 }

@@ -15,7 +15,7 @@ num-bigint-dig = {version = "0.8.2", features = ["prime"]}
 num-traits = "0.2.15"
 byteorder = "1.4.3"
 rayon = "1.7.0"
-
+prost = "0.11"
 
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
 bfv = {path="./../bfv/bfv"}
@@ -23,6 +23,10 @@ bfv = {path="./../bfv/bfv"}
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 bfv = {path="./../bfv/bfv", features=["hexl"]}
 hexl-rs = {path="./../hexl-rs"}
+
+
+[build-dependencies]
+prost-build = "0.11.9"
 
 
 [features]
@@ -41,4 +45,8 @@ harness = false
 
 [[bench]]
 name = "range_fn"
+harness = false
+
+[[bench]]
+name = "pvw"
 harness = false

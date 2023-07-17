@@ -827,6 +827,8 @@ dependencies = [
  "ndarray",
  "num-bigint-dig",
  "num-traits",
+ "prost",
+ "prost-build",
  "rand",
  "rand_chacha",
  "rayon",
