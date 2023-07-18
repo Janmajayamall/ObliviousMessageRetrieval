@@ -116,16 +116,6 @@ pub fn generate_random_payloads(set_size: usize) -> Vec<Vec<u64>> {
     payloads
 }
 
-pub unsafe fn decrypt_and_print(evaluator: &Evaluator, ct: &Ciphertext, sk: &SecretKey, tag: &str) {
-    let mut rng = thread_rng();
-    let v = evaluator.plaintext_decode(&evaluator.decrypt(sk, ct), Encoding::default());
-    println!(
-        "{tag}= Noise: {}; m: {:?}",
-        evaluator.measure_noise(sk, ct),
-        &v[..0]
-    );
-}
-
 pub fn generate_bfv_parameters() -> BfvParameters {
     let moduli = vec![50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
     let mut params = BfvParameters::new(&moduli, 65537, 1 << 15);
@@ -143,6 +133,7 @@ fn generate_random_clues(pvw_params: &PvwParameters, set_size: usize) -> Vec<Pvw
     (0..set_size)
         .into_par_iter()
         .map(|_| {
+            // TODO: figure out a better way
             let mut rng = thread_rng();
             pk.encrypt(&[0, 0, 0, 0], &mut rng)
         })

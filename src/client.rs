@@ -45,9 +45,11 @@ pub fn encrypt_pvw_sk<R: CryptoRng + RngCore>(
     cts
 }
 
-pub fn evaluation_key(params: &BfvParameters, sk: &SecretKey) -> EvaluationKey {
-    let mut rng = thread_rng();
-
+pub fn evaluation_key<R: CryptoRng + RngCore>(
+    params: &BfvParameters,
+    sk: &SecretKey,
+    rng: &mut R,
+) -> EvaluationKey {
     #[cfg(feature = "level")]
     let rlk_levels = (0..12).into_iter().collect_vec();
 
@@ -61,14 +63,18 @@ pub fn evaluation_key(params: &BfvParameters, sk: &SecretKey) -> EvaluationKey {
     rtg_indices.push(1);
     rtg_levels.push(0);
 
-    EvaluationKey::new(params, sk, &rlk_levels, &rtg_levels, &rtg_indices, &mut rng)
+    EvaluationKey::new(params, sk, &rlk_levels, &rtg_levels, &rtg_indices, rng)
 }
 
-pub fn gen_pv_exapnd_rtgs(params: &BfvParameters, sk: &SecretKey, level: usize) -> EvaluationKey {
+pub fn gen_pv_exapnd_rtgs<R: CryptoRng + RngCore>(
+    params: &BfvParameters,
+    sk: &SecretKey,
+    level: usize,
+    rng: &mut R,
+) -> EvaluationKey {
     // create galois keys
-    let mut rng = thread_rng();
     let (rtg_indices, rtg_levels) = get_pv_expand_rtgs_vecs(level, params.degree);
-    EvaluationKey::new(params, sk, &[], &rtg_levels, &rtg_indices, &mut rng)
+    EvaluationKey::new(params, sk, &[], &rtg_levels, &rtg_indices, rng)
 }
 
 pub fn get_pv_expand_rtgs_vecs(level: usize, degree: usize) -> (Vec<isize>, Vec<usize>) {

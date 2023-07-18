@@ -60,7 +60,7 @@ fn print_detection_key_size() {
 
     // Client's detection keys
     let mut pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
-    let ek = evaluation_key(evaluator.params(), &sk);
+    let ek = evaluation_key(evaluator.params(), &sk, &mut rng);
 
     // change representation of pvw_sk_cts from Evaluation to Coefficient due the possibility that we might
     // use different NTT backends in future
@@ -106,7 +106,7 @@ fn demo() {
 
     // Client's detection keys
     let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
-    let ek = evaluation_key(evaluator.params(), &sk);
+    let ek = evaluation_key(evaluator.params(), &sk, &mut rng);
 
     // generate pertinent indices
     let pertinency_message_count = 64;
@@ -178,16 +178,8 @@ fn demo() {
         );
     );
 
-    // mod down to level 12 irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
+    // phase1 mods down to level 12 in the end irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
     let level = 12;
-    evaluator.mod_down_level(&mut phase1_ciphertext, level);
-
-    print_noise!(
-        println!(
-            "phase 1 noise (after mod down): {}",
-            evaluator.measure_noise(&sk, &phase1_ciphertext)
-        );
-    );
 
     // Precomp phase 2
     let (_, buckets, weights) = assign_buckets_and_weights(
@@ -306,11 +298,22 @@ fn phase1(
         );
     );
 
-    let v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
+    let mut v = mul_and_reduce_ranged_cts_to_1(&ranged_cts, &evaluator, &ek, &sk);
 
     print_noise!(
         println!(
             "Phase 1 end noise (before mod down): {}",
+            evaluator.measure_noise(sk, &v)
+        );
+    );
+
+    // mod down to level 12 irrespective of whether `level` feature is enabled or not. Otherwise
+    // phase 2 will be very expensive
+    evaluator.mod_down_level(&mut v, 12);
+
+    print_noise!(
+        println!(
+            "Phase 1 end noise (after mod down): {}",
             evaluator.measure_noise(sk, &v)
         );
     );

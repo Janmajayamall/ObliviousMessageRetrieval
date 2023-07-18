@@ -194,26 +194,27 @@ pub fn range_fn(
         match_level = m_powers.last().unwrap().level() + 1;
         assert!(match_level == 10);
 
-        time_it!("Matching level k_powers",
-            k_powers.par_iter_mut().for_each(|mut c| {
-                // mod down before changing representation
-                evaluator.mod_down_level(&mut c, match_level);
+        k_powers.par_iter_mut().for_each(|mut c| {
+            // mod down before changing representation
+            evaluator.mod_down_level(&mut c, match_level);
 
-                // change k_powers to `Evaluation` for efficient plaintext multiplication
-                evaluator.ciphertext_change_representation(&mut c, Representation::Evaluation);
-            });
+            // change k_powers to `Evaluation` for efficient plaintext multiplication
+            evaluator.ciphertext_change_representation(&mut c, Representation::Evaluation);
+        });
 
-
-        );
-
-        time_it!("Matching level m_powers",
-            m_powers.par_iter_mut().for_each(|mut c| {
-                // mod down before changing representation
-                evaluator.mod_down_level(&mut c, match_level);
-            });
-
-        );
+        m_powers.par_iter_mut().for_each(|mut c| {
+            // mod down before changing representation
+            evaluator.mod_down_level(&mut c, match_level);
+        });
     );
+
+    #[cfg(not(feature = "level"))]
+    {
+        k_powers.par_iter_mut().for_each(|mut c| {
+            // change k_powers to `Evaluation` for efficient plaintext multiplication
+            evaluator.ciphertext_change_representation(&mut c, Representation::Evaluation);
+        });
+    }
 
     let level = match_level;
 

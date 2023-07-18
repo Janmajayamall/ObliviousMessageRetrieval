@@ -4,12 +4,12 @@ use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{
     compute_weight_pts, precompute_expand_32_roll_pt, procompute_expand_roll_pt, read_indices_poly,
 };
-use crate::utils::decrypt_and_print;
+
 use crate::{
     optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
     pvw::PvwParameters,
 };
-use crate::{BUCKET_SIZE, GAMMA, MESSAGE_BYTES};
+use crate::{print_noise, BUCKET_SIZE, GAMMA, MESSAGE_BYTES};
 use bfv::{
     BfvParameters, Ciphertext, EvaluationKey, Evaluator, GaloisKey, Plaintext, Poly, PolyType,
     RelinearizationKey, Representation, SecretKey,
@@ -155,11 +155,15 @@ pub fn pv_expand_batch(
         // dbg!(ones.first().unwrap().c_ref()[0].coefficients.shape()[0]);
     });
 
+    print_noise!(
+        println!("pv_expand_batch ones[0] noise: {}", evaluator.measure_noise(sk, ones.first().unwrap()));
+        println!("pv_expand_batch ones[-1] noise: {}", evaluator.measure_noise(sk, ones.last().unwrap()));
+    );
+
     println!(
-        "Pv expand took for batch_size {}: {:?} level{}",
+        "Pv expand took for batch_size {}: {:?};",
         pts_32.len(),
         now.elapsed(),
-        ones.first().unwrap().c_ref()[0].coefficients().shape()[0]
     );
 
     ones
@@ -396,7 +400,7 @@ mod tests {
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
 
         // Generator rotation keys
-        let mut ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
+        let mut ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level, &mut rng);
 
         // pre-computes
         let (pts_32_batch, pts_4_roll, pts_1_roll) =
@@ -453,7 +457,7 @@ mod tests {
         // restrict to single batch
         let pts_32_batch = pts_32_batch[..1].to_vec();
 
-        let ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level);
+        let ek = gen_pv_exapnd_rtgs(evaluator.params(), &sk, level, &mut rng);
         let ones = pv_expand_batch(
             &ek,
             &evaluator,
