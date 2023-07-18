@@ -1,6 +1,5 @@
+use crate::{level_down, print_noise};
 use bfv::{Ciphertext, EvaluationKey, Evaluator, SecretKey};
-
-use crate::level_down;
 
 pub mod phase2;
 pub mod powers_x;
@@ -42,8 +41,10 @@ pub fn mul_and_reduce_ranged_cts_to_1(
         },
     );
 
-    // println!("v0 noise: {}", evaluator.measure_noise(&sk, &v0));
-    // println!("v1 noise: {}", evaluator.measure_noise(&sk, &v1));
+    print_noise!(
+        println!("v0 noise: {}", evaluator.measure_noise(&sk, &v0));
+        println!("v1 noise: {}", evaluator.measure_noise(&sk, &v1));
+    );
 
     let v = evaluator.mul(&v0, &v1);
     // Relinearization of `v` can be modified such that overall ntts can be minized.
