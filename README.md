@@ -1,8 +1,8 @@
-Oblivious Message Retrieval (OMR)
+# Oblivious Message Retrieval (OMR)
 
 This repository contains an efficient implementation of [Oblivious Message Retrieval](https://eprint.iacr.org/2021/1256.pdf).
 
-In production OMR can be divided into 2 phases. Phase 1 regularly collects and batches all transactions in batch of size 32768, then processed each batch for each user. Phase 2 is the request phase, that is when users requests for their message digest over arbitrary range.
+In production OMR can be divided into 2 phases. Phase 1 regularly collects and batches transactions in batch of size 32768, then processes each batch for each user. Phase 2 is the request phase, that is when user requests for their message digest over arbitrary range.
 
 ## How to run
 
@@ -14,6 +14,7 @@ Before running the program there are a few things to be kept in mind
     - `level`: Enables levelled implementation. This should be enabled when testing performance.
     - `precomp_pvw`: Combination of `level` with `precomp_pvw` will give the best performance if there are more than 8 no. of cores available. However, `precomp_pvw` comes with additonal assumptions mentioned in [PVW Precompute](#pvw-precompute).
 3. The program performs best on x86 machines with AVX512IFMA instruction set.
+4. OMR has high memory requirement. Depending on no. of cores used, it phase 1 can easily exceed 20GB and phase 2 can exceed 100GB. 
    <br></br>
 
 First run setup
@@ -85,20 +86,26 @@ cargo run --release --features "level" 3 [cores]
 All benchmarks were performed on `r6i.8xlarge` ec2 instance equipped with 3rd Gen Intel Xeon and 32vcpus (16 physical cores).
 
 Single run of phase 1 and phase 2 processes 32768 clues.
-
-Performance with only `level` feature:
+<br></br>
+**Performance with only `level` feature:**
 
 | Cores        | Phase 1 time (in ms) | Phase 2 time (in ms) | Total time (in ms) |
 | ------------ | -------------------- | -------------------- | ------------------ |
 | 1            | 313680               | 844228               | 1157908            |
-| 16 (32vcpus) | Content Cell         |
+| 16 (32vcpus) | 52127                | 58095                | 110222             |
 
-Performance with `level` and `precomp_pvw` features.
+<br></br>
+**Performance with `level` and `precomp_pvw` features.**
 (Note: cores = 1 is omitted since `precomp_pvw` only works with >=8 cores)
 | Cores | Phase 1 time (in ms) | Phase 2 time (in ms) | Total time (in ms) |
 | ------------ | -------------------- | -------------------- | ------------------ |
-| 1 | 313680 | 844228 | 1157908 |
-| 16 (32vcpus) | Content Cell |
+| 16 (32vcpus) | 28202 |57930|84226
+
+Storage size for PVW Precompute per user on 16 cores: 47.5 MB
+
+## Detection Key Size
+
+**163 MB**
 
 ## Security
 
@@ -106,7 +113,7 @@ Please [check](./Security.md)
 
 ## Contribution
 
-If you want to work togther on OMR (and other FHE related projects) then please check [contact](#contact) and send a dm. Also feel free to join this telegram channel.
+If you want to work togther on OMR (and other FHE related projects) then please check [contact](#contact) and send a dm. Also feel free to join [this](https://t.me/+rDHqU-Py34s4N2M1) telegram channel.
 
 ## Use in production
 
@@ -114,8 +121,8 @@ If you want test OMR in production, then please check [contact](#contact) and re
 
 ## Contact
 
-Telegram:
-Email:
+Telegram: @janmajayamall <br />
+Email: janmajaya@caird.xyz
 
 ## Acknowledgements
 

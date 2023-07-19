@@ -36,9 +36,6 @@ pub fn pvw_setup(
     // thus defining the total time taken.
     let rots_per_thread = (512.0 / threads_by_4).floor() as usize;
 
-    dbg!(threads_by_4);
-    dbg!(rots_per_thread);
-
     let mut checkpoint_cts = vec![vec![]; 4];
     let mut cts = pvw_sk_cts.to_vec();
 
@@ -180,7 +177,7 @@ fn thread_helper(
 ) -> (Array2<u128>, Array2<u128>) {
     if sk_cts.len() == 1 {
         let s = &sk_cts[0];
-        println!(" len: {}", pts.len());
+        // println!(" len: {}", pts.len());
         optimised_pvw_fma_with_rot(params, s, pts, pts.len(), rtg, sk)
     } else {
         let mid = sk_cts.len() / 2;
