@@ -257,6 +257,7 @@ fn print_detection_key_size() {
 }
 
 fn demo() {
+    println!("Using {} threads", rayon::current_num_threads());
     if !rayon::current_num_threads().is_power_of_two() {
         println!("WARNING: Threads available is not a power of 2. Program isn't capable of fully utilising all cores if total cores are not a power of 2. Moreover, program might panic!");
     }
@@ -586,10 +587,25 @@ fn client_processing(
     messages
 }
 
-fn main() {
-    let threads = std::env::args().nth(1);
+fn print_menu() {
+    let menu = "
+        Select one of the options
+        (1) Runs demo
+        (2) Print detection key size
+        (3) Print storage required per user for `pvw_precompute`
 
-    // set global thread pool using provided thread count
+        For more info, please refer to README.md
+    ";
+
+    println!("{menu}");
+}
+
+fn main() {
+    let option = std::env::args().nth(1);
+    let threads = std::env::args().nth(2);
+
+    let option = option.map_or(0, |o| o.parse::<usize>().map_or(0, |o| o));
+
     if threads.is_some() {
         let threads = threads
             .unwrap()
@@ -601,15 +617,15 @@ fn main() {
             .unwrap()
     }
 
-    demo();
-
-    // print_pvw_decrypt_precompute_size();
-    // print_detection_key_size();
-    // call_pvw_decrypt();
-    // call_pvw_decrypt_precomputed();
-
-    // powers_of_x();
-    // call_range_fn_once();
-
-    // range_fn_trial();
+    if option == 0 {
+        print_menu();
+    } else {
+        if option == 1 {
+            demo();
+        } else if option == 2 {
+            print_detection_key_size();
+        } else if option == 3 {
+            print_pvw_decrypt_precompute_size();
+        }
+    }
 }
