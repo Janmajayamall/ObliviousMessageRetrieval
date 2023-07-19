@@ -230,7 +230,7 @@ mod tests {
         let m = params
             .plaintext_modulus_op
             .random_vec(params.degree, &mut rng);
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let evaluator = Evaluator::new(params);
         let pt = evaluator.plaintext_encode(&m, Encoding::default());

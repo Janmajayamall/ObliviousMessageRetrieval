@@ -16,8 +16,6 @@ use rand_chacha::rand_core::le;
 use rayon::prelude::{
     IndexedParallelIterator, IntoParallelIterator, IntoParallelRefMutIterator, ParallelIterator,
 };
-use rayon::slice::ParallelSliceMut;
-use std::{collections::HashMap, sync::Arc, time::Instant};
 
 /// Pre-compute rotations of `sk_cts`s such that pvw_decrypt can leverage all avaialble cores.
 pub fn pvw_setup(
@@ -200,7 +198,7 @@ fn thread_helper(
 }
 
 pub fn pvw_decrypt_precomputed(
-    pvw_params: &Arc<PvwParameters>,
+    pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hint_a_pts: &[Plaintext],
     hint_b_pts: &[Poly],

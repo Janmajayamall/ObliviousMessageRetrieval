@@ -230,7 +230,7 @@ mod tests {
     fn optimised_pvw_fma_works() {
         let mut rng = thread_rng();
         let params = generate_bfv_parameters();
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let mut m0 = params
             .plaintext_modulus_op
@@ -295,7 +295,7 @@ mod tests {
         let m = params
             .plaintext_modulus_op
             .random_vec(params.degree, &mut rng);
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let evaluator = Evaluator::new(params);
         let pt = evaluator.plaintext_encode(&m, Encoding::default());
@@ -349,7 +349,7 @@ mod tests {
         let m = params
             .plaintext_modulus_op
             .random_vec(params.degree, &mut rng);
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let evaluator = Evaluator::new(params);
 

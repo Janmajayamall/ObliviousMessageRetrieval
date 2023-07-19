@@ -117,7 +117,7 @@ pub fn generate_random_payloads(set_size: usize) -> Vec<Vec<u64>> {
 }
 
 pub fn generate_bfv_parameters() -> BfvParameters {
-    let moduli = vec![50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 60];
+    let moduli = vec![50, 50, 50, 60, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50, 50];
     let mut params = BfvParameters::new(&moduli, 65537, 1 << 15);
     params.enable_hybrid_key_switching(&[50, 50, 60]);
     params

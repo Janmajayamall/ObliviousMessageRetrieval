@@ -98,7 +98,7 @@ pub fn pv_expand_batch(
     pts_32: &[Plaintext],
     sk: &SecretKey,
 ) -> Vec<Ciphertext> {
-    let now = std::time::Instant::now();
+    // let now = std::time::Instant::now();
 
     let degree = evaluator.params().degree as isize;
     let mut ones = vec![];
@@ -160,11 +160,11 @@ pub fn pv_expand_batch(
         println!("pv_expand_batch ones[-1] noise: {}", evaluator.measure_noise(sk, ones.last().unwrap()));
     );
 
-    println!(
-        "Pv expand took for batch_size {}: {:?};",
-        pts_32.len(),
-        now.elapsed(),
-    );
+    // println!(
+    //     "Pv expand took for batch_size {}: {:?};",
+    //     pts_32.len(),
+    //     now.elapsed(),
+    // );
 
     ones
 }
@@ -186,7 +186,7 @@ pub fn process_pv_batch(
     weights: &[Vec<u64>],
     sk: &SecretKey,
 ) -> ((Array2<u128>, Array2<u128>), (Array2<u128>, Array2<u128>)) {
-    println!("Processing batches: {start} - {end}");
+    // println!("Processing batches: {start} - {end}");
 
     // expand batch cts
     let expanded_cts = pv_expand_batch(
@@ -204,7 +204,8 @@ pub fn process_pv_batch(
     let start_lane = start * 32;
     let end_lane = end * 32;
 
-    println!("Reading indices poly for lanes {start_lane} to {end_lane}...");
+    // println!("Reading indices poly for lanes {start_lane} to {end_lane}...");
+
     // Note that indices_poly current computes the poly at runtime. However these polynomials do not change
     // across multiple runs. Hence can be pre-computed at stored, replacing expensive NTTs with read operations.
     let indices_poly = read_indices_poly(evaluator, level, start_lane, end_lane);
@@ -381,7 +382,7 @@ mod tests {
     fn test_phase2() {
         let mut rng = thread_rng();
         let params = generate_bfv_parameters();
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let m = (0..params.degree)
             .into_iter()
@@ -439,7 +440,7 @@ mod tests {
     fn test_pv_expand_batch() {
         let mut rng = thread_rng();
         let params = generate_bfv_parameters();
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
         let degree = params.degree;
         let m = vec![3; params.degree];
 

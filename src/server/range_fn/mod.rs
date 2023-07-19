@@ -38,7 +38,7 @@ fn process_m_loop(
 ) -> Ciphertext {
     // process k loop when range is either equal or smaller than set_len
     if end - start <= set_len {
-        println!("{start} {end} {}", end - start);
+        // println!("{start} {end} {}", end - start);
 
         let mut sum = Ciphertext::new(vec![], PolyType::Q, 0);
         for i in start..end {
@@ -383,7 +383,7 @@ mod tests {
         let constants = precompute_range_constants(&ctx);
         let sub_one_precompute = sub_from_one_precompute(&params, precompute_level);
 
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
         let mut m = params
             .plaintext_modulus_op
             .random_vec(params.degree, &mut rng);

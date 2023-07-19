@@ -154,7 +154,7 @@ mod tests {
     fn test_evaluate_powers() {
         let mut rng = thread_rng();
         let params = generate_bfv_parameters();
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
         let m = vec![3; params.degree];
 
         let evaluator = Evaluator::new(params);
@@ -208,7 +208,7 @@ mod tests {
     fn powers_of_x_ct_works() {
         let mut rng = thread_rng();
         let params = generate_bfv_parameters();
-        let sk = SecretKey::random(params.degree, &mut rng);
+        let sk = SecretKey::random_with_params(&params, &mut rng);
         let m = vec![3; params.degree];
 
         let evaluator = Evaluator::new(params);

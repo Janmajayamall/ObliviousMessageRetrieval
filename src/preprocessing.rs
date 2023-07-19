@@ -2,7 +2,6 @@ use crate::pvw::{PvwCiphertext, PvwParameters};
 use bfv::{BfvParameters, Encoding, Evaluator, Modulus, Plaintext, Poly, Representation};
 use rand::{distributions::Uniform, CryptoRng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
-use std::sync::Arc;
 
 pub fn pre_process_batch(
     pvw_params: &PvwParameters,

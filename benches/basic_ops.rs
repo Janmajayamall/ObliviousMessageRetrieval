@@ -10,7 +10,6 @@ use omr::{
     utils::generate_bfv_parameters,
 };
 use rand::{thread_rng, Rng};
-use std::{result, sync::Arc, time::Duration};
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("basic-ops");
@@ -22,7 +21,7 @@ fn bench(c: &mut Criterion) {
     let m = params
         .plaintext_modulus_op
         .random_vec(params.degree, &mut rng);
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
 
     let evaluator = Evaluator::new(params);
     let pt = evaluator.plaintext_encode(&m, Encoding::default());

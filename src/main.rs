@@ -5,19 +5,6 @@ use bfv::{
 };
 use itertools::{izip, Itertools};
 use ndarray::Array2;
-use prost::Message;
-use rand::{thread_rng, Rng};
-use rayon::slice::ParallelSliceMut;
-use std::{
-    cell::Cell,
-    collections::{HashMap, HashSet},
-    f32::consts::E,
-    hash::Hash,
-    io::Write,
-    os::unix::thread,
-    sync::Arc,
-};
-
 use omr::{
     client::{
         construct_lhs, construct_rhs, encrypt_pvw_sk, evaluation_key, gen_pv_exapnd_rtgs,
@@ -43,6 +30,53 @@ use omr::{
     },
     BUCKET_SIZE, GAMMA, K,
 };
+use prost::Message;
+use rand::{thread_rng, Rng};
+use rayon::slice::ParallelSliceMut;
+
+fn print_pvw_decrypt_precompute_size() {
+    let mut rng = thread_rng();
+
+    let params = generate_bfv_parameters();
+    let sk = SecretKey::random_with_params(&params, &mut rng);
+    let evaluator = Evaluator::new(params);
+    let pvw_params = PvwParameters::default();
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+
+    let mut pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+
+    // Don't call `pvw_setup` to get rotations of all `pvw_sk_cts` since it will take sometime. Simply
+    // calculate no. of checkpoints required per ciphertext in `pvw_sk_ct` for available threads.
+
+    let total_threads = rayon::current_num_threads();
+    assert!(total_threads % 4 == 0);
+    assert!(total_threads >= 8);
+    // Assign equal no. of threads to each of 4 instances of pvw decrypt
+    let threads_by_4 = total_threads / 4;
+
+    // Each instance of pvw decrypt performs 512 rotations and plaintext multiplications of single pvw_sk_ct. Since rotations
+    // are serial, to parallelise we must precompute rotatations of pvw_sk_ct at specific checkpoints (depending on threads_by_4) and store them.
+    // For ex, when threads_by_4 = 4 it means each call of pvw_decrypt has 4 threads. So we precompute rotations of
+    // pvw_sk_ct at checkpints that divide 512 into 4 parts (ie 512/threads_by_4) and each part can be processed serially.
+    // Thus the checkpoints must be 4 instances of pvw_sk_ct rotated by 0, 128, 256, 384. At run time each thread will perform
+    // `512/4 = 128` rotations.
+    let instances_of_each_pvw_sk = threads_by_4;
+
+    let total_ciphertexts_stored = instances_of_each_pvw_sk * pvw_sk_cts.len();
+
+    // Size of each of the 4 `pvw_sk_cts` as well as their `threads_by_4` instances obtained after rotations at checkpoints are equal.
+    // So we can serialise just one ciphertext and estimate the total size.
+    let mut ct = pvw_sk_cts[0].clone();
+    // Serialisation is not allowed in Evaluation representation since `NTT` backend may differ. This may change in future.
+    evaluator.ciphertext_change_representation(&mut ct, Representation::Coefficient);
+    let proto_ct = CiphertextProto::try_from_with_parameters(&ct, evaluator.params());
+    let size = proto_ct.encode_to_vec().len();
+
+    println!(
+        "Pvw Precompute Size per User: {} bytes",
+        size * total_ciphertexts_stored
+    );
+}
 
 fn print_detection_key_size() {
     let mut rng = thread_rng();
@@ -54,7 +88,7 @@ fn print_detection_key_size() {
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
 
     // Client's BFV keys
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
 
     let evaluator = Evaluator::new(params);
 
@@ -96,11 +130,17 @@ fn demo() {
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
     // Client's BFV keys
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
 
     // a random secret key as a placeholder to be passed around in functions. Should be
     // removed in production.
-    let random_sk = SecretKey::random(params.degree, &mut rng);
+    let mut random_sk = SecretKey::random_with_params(&params, &mut rng);
+
+    #[cfg(feature = "noise")]
+    {
+        // set `random_sk` as `sk` to print correct noise
+        random_sk = sk.clone();
+    }
 
     let evaluator = Evaluator::new(params);
 
@@ -119,13 +159,7 @@ fn demo() {
     }
     pertinent_indices.sort();
 
-    // generate clues and payloads
-    // let clues = generate_clues(
-    //     &pvw_pk,
-    //     &pvw_params,
-    //     &pertinent_indices,
-    //     evaluator.params().degree,
-    // );
+    // Generate clues and payloads
     let clues = prepare_clues_for_demo(
         &pvw_params,
         &pvw_pk,
@@ -170,7 +204,7 @@ fn demo() {
             &precomp_range_constants,
             &precomp_sub_from_one,
             &ek,
-            &sk,
+            &random_sk,
             #[cfg(not(feature = "precomp_pvw"))]
             &pvw_sk_cts,
             #[cfg(feature = "precomp_pvw")]
@@ -207,7 +241,7 @@ fn demo() {
             &pts_4_roll,
             &pts_1_roll,
             level,
-            &sk,
+            &random_sk,
         );
     );
 
@@ -249,8 +283,8 @@ fn phase1(
         pvw_decrypt_precomputed(
             &pvw_params,
             &evaluator,
-            &hint_a,
-            &hint_b,
+            &precomp_hint_a,
+            &precomp_hint_b,
             &precomputed_pvw_sk_cts,
             ek.get_rtg_ref(1, 0),
             &sk,
@@ -411,7 +445,7 @@ fn client_processing(
 fn powers_of_x() {
     let mut rng = thread_rng();
     let params = generate_bfv_parameters();
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
     let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
 
     let m = params
@@ -437,12 +471,12 @@ fn powers_of_x() {
 
 fn call_pvw_decrypt() {
     let mut rng = thread_rng();
-    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_params = PvwParameters::default();
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
     let params = generate_bfv_parameters();
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
 
     let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
     let clues = (0..params.degree)
@@ -478,12 +512,12 @@ fn call_pvw_decrypt() {
 
 fn call_pvw_decrypt_precomputed() {
     let mut rng = thread_rng();
-    let pvw_params = Arc::new(PvwParameters::default());
+    let pvw_params = PvwParameters::default();
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
     let pvw_pk = pvw_sk.public_key(&mut rng);
 
     let params = generate_bfv_parameters();
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
 
     let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
     let clues = (0..params.degree)
@@ -526,7 +560,7 @@ fn call_range_fn_once() {
     let constants = precompute_range_constants(&ctx);
     let sub_one_precompute = sub_from_one_precompute(&params, level);
 
-    let sk = SecretKey::random(params.degree, &mut rng);
+    let sk = SecretKey::random_with_params(&params, &mut rng);
     let mut m = params
         .plaintext_modulus_op
         .random_vec(params.degree, &mut rng);
@@ -538,9 +572,9 @@ fn call_range_fn_once() {
     // gen evaluation key
     let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
 
-    // time_it!("Range fn time: ",
-    //     let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
-    // );
+    time_it!("Range fn time: ",
+        let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    );
 
     let cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
     time_it!("Range fn 4 times: ",
@@ -555,7 +589,8 @@ fn main() {
         .num_threads(threads)
         .build_global()
         .unwrap();
-    demo();
+    // demo();
+    print_pvw_decrypt_precompute_size();
     // print_detection_key_size();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();

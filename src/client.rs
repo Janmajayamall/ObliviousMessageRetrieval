@@ -1,11 +1,9 @@
-use core::panic;
-use std::{f32::consts::PI, sync::Arc};
-
 use crate::pvw::{PvwCiphertext, PvwParameters, PvwSecretKey};
 use bfv::{
     rot_to_galois_element, BfvParameters, Ciphertext, Encoding, EvaluationKey, Evaluator,
     GaloisKey, Modulus, Plaintext, Representation, SecretKey,
 };
+use core::panic;
 use itertools::Itertools;
 use rand::{thread_rng, CryptoRng, RngCore};
 use rayon::vec;
