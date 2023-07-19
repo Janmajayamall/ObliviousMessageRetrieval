@@ -14,7 +14,7 @@ Before running the program there are a few things to be kept in mind
     - `level`: Enables levelled implementation. This should be enabled when testing performance.
     - `precomp_pvw`: Combination of `level` with `precomp_pvw` will give the best performance if there are more than 8 no. of cores available. However, `precomp_pvw` comes with additonal assumptions mentioned in [PVW Precompute](#pvw-precompute).
 3. The program performs best on x86 machines with AVX512IFMA instruction set.
-4. OMR has high memory requirement. Depending on no. of cores used, it phase 1 can easily exceed 20GB and phase 2 can exceed 100GB. 
+4. OMR has high memory requirement. Depending on no. of cores used, it phase 1 can easily exceed 20GB and phase 2 can exceed 100GB.
    <br></br>
 
 First run setup
@@ -126,4 +126,4 @@ Email: janmajaya@caird.xyz
 
 ## Acknowledgements
 
-Development of OMR is support through a grant from [Aztec](https://aztec.network/).
+Development of OMR is supported through a grant from [Aztec](https://aztec.network/).

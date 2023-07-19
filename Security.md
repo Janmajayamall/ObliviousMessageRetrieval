@@ -12,12 +12,10 @@ To verify the security of OMR you can use [lattice estimator](https://github.com
 
 The parameters we use for OMR are as following:
 
-$$
-n = 2^{15} \\\
-logQ = 760 \\\
-logP = 160 \\\
-logQP = 920
-$$
+$n = 2^{15}$ <br/>
+$logQ = 760$ <br/>
+$logP = 160$ <br/>
+$logQP = 920$ <br/>
 
 The secret key is sampled from sparse ternary distribution with hamming weight $n/2$.
 
