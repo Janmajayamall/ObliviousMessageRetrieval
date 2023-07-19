@@ -336,22 +336,23 @@ fn demo() {
 
     // Running phase 1
     println!("Phase 1...");
-    time_it!("Phase 1",
-        let mut phase1_ciphertext = phase1(
-            &evaluator,
-            &pvw_params,
-            &precomp_hint_a,
-            &precomp_hint_b,
-            &precomp_range_constants,
-            &precomp_sub_from_one,
-            &ek,
-            &random_sk,
-            #[cfg(not(feature = "precomp_pvw"))]
-            &pvw_sk_cts,
-            #[cfg(feature = "precomp_pvw")]
-            &pvw_decrypt_precompute
-        );
+    let p1now = std::time::SystemTime::now();
+    let mut phase1_ciphertext = phase1(
+        &evaluator,
+        &pvw_params,
+        &precomp_hint_a,
+        &precomp_hint_b,
+        &precomp_range_constants,
+        &precomp_sub_from_one,
+        &ek,
+        &random_sk,
+        #[cfg(not(feature = "precomp_pvw"))]
+        &pvw_sk_cts,
+        #[cfg(feature = "precomp_pvw")]
+        &pvw_decrypt_precompute,
     );
+    let p1_time_ms = p1now.elapsed().unwrap().as_millis();
+    println!("Phase 1 duration: {} ms", p1_time_ms);
 
     // phase1 mods down to level 12 in the end irrespective of whether level feature is enabled. Otherwise, phase2 will be very expensive.
     let level = 12;
@@ -370,21 +371,24 @@ fn demo() {
 
     // Phase 2
     println!("Phase 2...");
-    time_it!("Phase 2",
-        let (indices_ct, weights_ct) = phase2(
-            &evaluator,
-            &mut phase1_ciphertext,
-            &ek,
-            &buckets,
-            &weights,
-            &payloads,
-            &pts_32_batch,
-            &pts_4_roll,
-            &pts_1_roll,
-            level,
-            &random_sk,
-        );
+    let p2now = std::time::SystemTime::now();
+    let (indices_ct, weights_ct) = phase2(
+        &evaluator,
+        &mut phase1_ciphertext,
+        &ek,
+        &buckets,
+        &weights,
+        &payloads,
+        &pts_32_batch,
+        &pts_4_roll,
+        &pts_1_roll,
+        level,
+        &random_sk,
     );
+    let p2_time_ms = p2now.elapsed().unwrap().as_millis();
+    println!("Phase 2 duration: {} ms", p2_time_ms);
+
+    println!("Total server duration: {} ms", p2_time_ms + p1_time_ms);
 
     // Client
     time_it!("Client",
