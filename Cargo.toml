@@ -20,11 +20,11 @@ bytes = "1.4.0"
 walkdir = "2.3.3"
 
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
-bfv = {path="./../bfv/bfv"}
+bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev"}
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
-bfv = {path="./../bfv/bfv", features=["hexl"]}
-hexl-rs = {path="./../hexl-rs"}
+bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev", features=["hexl"]}
+hexl-rs = {git = "https://github.com/Janmajayamall/hexl-rs.git"}
 
 
 [build-dependencies]

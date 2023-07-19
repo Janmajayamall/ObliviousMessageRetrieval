@@ -1,6 +1,6 @@
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use omr::pvw::{PvwCiphertext, PvwParameters, PvwPublicKey, PvwSecretKey};
-use rand::{thread_rng, Rng};
+use criterion::{criterion_group, criterion_main, Criterion};
+use omr::pvw::{PvwParameters, PvwSecretKey};
+use rand::{thread_rng};
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("pvw");

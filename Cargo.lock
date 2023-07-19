@@ -43,6 +43,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "bfv"
 version = "0.1.0"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#0788b06a6ff7228648595658b7e6f1b10f63655c"
 dependencies = [
  "crypto-bigint",
  "fhe-math",
@@ -496,10 +497,14 @@ checksum = "443144c8cdadd93ebf52ddb4056d257f5b52c04d3c804e657d19eb73fc33668b"
 [[package]]
 name = "hexl-rs"
 version = "0.1.0"
+source = "git+https://github.com/Janmajayamall/hexl-rs.git#7908790fa72a23f1180c8d1c49eb3dd9fedd66a1"
 dependencies = [
  "bindgen",
  "cmake",
  "link-cplusplus",
+ "ndarray",
+ "rand",
+ "traits",
 ]
 
 [[package]]
@@ -1328,7 +1333,7 @@ dependencies = [
 [[package]]
 name = "traits"
 version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv?branch=dev#1ef14b68d9c452fd3b93cf90917bdb337f062d40"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#0788b06a6ff7228648595658b7e6f1b10f63655c"
 
 [[package]]
 name = "typenum"

@@ -1,15 +1,15 @@
 use bfv::{
-    generate_primes_vec, BfvParameters, Encoding, Evaluator, Modulus, Plaintext, Poly, PolyContext,
+    Encoding, Evaluator, Modulus,
     PolyType, Representation, SecretKey,
 };
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
 use ndarray::Array2;
 use omr::{
     optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma},
     utils::generate_bfv_parameters,
 };
-use rand::{thread_rng, Rng};
+use rand::{thread_rng};
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("basic-ops");

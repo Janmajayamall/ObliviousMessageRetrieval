@@ -1,9 +1,9 @@
 use bfv::{
-    generate_primes_vec, BfvParameters, Encoding, Evaluator, Modulus, Plaintext, Poly, PolyContext,
+    Encoding, Evaluator, Modulus,
     PolyType, Representation, SecretKey,
 };
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use itertools::{izip, Itertools};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use itertools::{Itertools};
 use ndarray::Array2;
 use omr::{
     server::range_fn::range_fn_fma::{
@@ -38,7 +38,7 @@ fn bench(c: &mut Criterion) {
             let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);
 
             let p0 = ctx.random(Representation::Evaluation, &mut rng);
-            let p1 = ctx.random(Representation::Evaluation, &mut rng);
+            let _p1 = ctx.random(Representation::Evaluation, &mut rng);
             let scalar_slice = (0..ctx.moduli_count()).map(|v| v as u64).collect_vec();
 
             #[cfg(target_arch = "x86_64")]
@@ -80,7 +80,7 @@ fn bench(c: &mut Criterion) {
                 let sk = SecretKey::random_with_params(&params, &mut rng);
 
                 let pt = evaluator.plaintext_encode(&m, Encoding::default());
-                let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
+                let ct = evaluator.encrypt(&sk, &pt, &mut rng);
                 let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);
                 let level = 0;
                 let single_powers = vec![ct.clone(); 128];

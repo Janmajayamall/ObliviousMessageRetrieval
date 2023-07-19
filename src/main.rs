@@ -1,21 +1,19 @@
 use bfv::{
-    BfvParameters, Ciphertext, CiphertextProto, Encoding, EvaluationKey, EvaluationKeyProto,
-    Evaluator, GaloisKey, Modulus, Plaintext, Poly, PolyType, RelinearizationKey, Representation,
-    SecretKey, TryFromWithParameters,
+    Ciphertext, CiphertextProto, Encoding, EvaluationKey, EvaluationKeyProto, Evaluator, Plaintext,
+    Poly, PolyType, Representation, SecretKey, TryFromWithParameters,
 };
-use itertools::{izip, Itertools};
+use itertools::Itertools;
 use ndarray::Array2;
 use omr::{
     client::{
-        construct_lhs, construct_rhs, encrypt_pvw_sk, evaluation_key, gen_pv_exapnd_rtgs,
-        pv_decompress, solve_equations,
+        construct_lhs, construct_rhs, encrypt_pvw_sk, evaluation_key, pv_decompress,
+        solve_equations,
     },
     level_down,
-    optimised::{coefficient_u128_to_ciphertext, sub_from_one_precompute},
-    plaintext,
+    optimised::sub_from_one_precompute,
     preprocessing::{assign_buckets_and_weights, pre_process_batch},
     print_noise,
-    pvw::{self, *},
+    pvw::*,
     server::{
         mul_and_reduce_ranged_cts_to_1,
         phase2::{self, phase2_precomputes},
@@ -32,7 +30,150 @@ use omr::{
 };
 use prost::Message;
 use rand::{thread_rng, Rng};
-use rayon::slice::ParallelSliceMut;
+
+// Functions to check runtime of expensive components //
+
+fn powers_of_x() {
+    let mut rng = thread_rng();
+    let params = generate_bfv_parameters();
+    let sk = SecretKey::random_with_params(&params, &mut rng);
+    let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
+
+    let m = params
+        .plaintext_modulus_op
+        .random_vec(params.degree, &mut rng);
+    let evaluator = Evaluator::new(params);
+    let pt = evaluator.plaintext_encode(&m, Encoding::default());
+    let ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+    time_it!("Powers of x [1,256) time: ",
+        let placeholder = Ciphertext::placeholder();
+        let mut calculated = vec![placeholder.clone(); 255];
+        calculated[0] = ct;
+        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, &sk);
+        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, &sk);
+    );
+}
+
+fn call_pvw_decrypt() {
+    let mut rng = thread_rng();
+    let pvw_params = PvwParameters::default();
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+
+    let params = generate_bfv_parameters();
+    let sk = SecretKey::random_with_params(&params, &mut rng);
+
+    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..params.degree)
+        .into_iter()
+        .map(|_| clue1.clone())
+        .collect_vec();
+
+    let evaluator = Evaluator::new(params);
+
+    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
+
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+
+    time_it!("Pvw Decrypt",
+        let res = pvw_decrypt(
+                &pvw_params,
+                &evaluator,
+                &hint_a,
+                &hint_b,
+                &pvw_sk_cts,
+                ek.get_rtg_ref(1, 0),
+                &sk,
+            );
+    );
+
+    dbg!(evaluator.measure_noise(&sk, &res[0]));
+    dbg!(evaluator.measure_noise(&sk, &res[1]));
+    dbg!(evaluator.measure_noise(&sk, &res[2]));
+    dbg!(evaluator.measure_noise(&sk, &res[3]));
+}
+
+fn call_pvw_decrypt_precomputed() {
+    let mut rng = thread_rng();
+    let pvw_params = PvwParameters::default();
+    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
+    let pvw_pk = pvw_sk.public_key(&mut rng);
+
+    let params = generate_bfv_parameters();
+    let sk = SecretKey::random_with_params(&params, &mut rng);
+
+    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
+    let clues = (0..params.degree)
+        .into_iter()
+        .map(|_| clue1.clone())
+        .collect_vec();
+
+    let evaluator = Evaluator::new(params);
+
+    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
+
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
+
+    println!("Running precomputation...");
+    let precomputed_pvw_sk_cts = pvw_setup(&evaluator, &ek, &pvw_sk_cts);
+
+    println!("Starting decrypt...");
+    time_it!("Pvw Decrypt Precomputed",
+        let _ = pvw_decrypt_precomputed(
+                &pvw_params,
+                &evaluator,
+                &hint_a,
+                &hint_b,
+                &precomputed_pvw_sk_cts,
+                ek.get_rtg_ref(1, 0),
+                &sk,
+            );
+    );
+}
+
+/// Wrapper for setting up necessary things before calling range_fn
+fn call_range_fn_once() {
+    let params = generate_bfv_parameters();
+    let level = 0;
+    let ctx = params.poly_ctx(&PolyType::Q, level);
+
+    let mut rng = thread_rng();
+    let constants = precompute_range_constants(&ctx);
+    let sub_one_precompute = sub_from_one_precompute(&params, level);
+
+    let sk = SecretKey::random_with_params(&params, &mut rng);
+    let m = params
+        .plaintext_modulus_op
+        .random_vec(params.degree, &mut rng);
+
+    let evaluator = Evaluator::new(params);
+    let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+    let ct = evaluator.encrypt(&sk, &pt, &mut rng);
+
+    // gen evaluation key
+    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
+
+    time_it!("Range fn time: ",
+        let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    );
+
+    let cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
+    time_it!("Range fn 4 times: ",
+        let _ = range_fn_4_times(&cts, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
+    );
+}
+
+// END //
 
 fn print_pvw_decrypt_precompute_size() {
     let mut rng = thread_rng();
@@ -43,7 +184,7 @@ fn print_pvw_decrypt_precompute_size() {
     let pvw_params = PvwParameters::default();
     let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
 
-    let mut pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
+    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
 
     // Don't call `pvw_setup` to get rotations of all `pvw_sk_cts` since it will take sometime. Simply
     // calculate no. of checkpoints required per ciphertext in `pvw_sk_ct` for available threads.
@@ -304,7 +445,6 @@ fn phase1(
 
     print_noise!(
         decrypted_cts.iter().enumerate().for_each(|(index, ct)| {
-            dbg!(ct.c_ref()[0].representation());
             println!(
                 "Decrypted Ct {index} noise: {}",
                 evaluator.measure_noise(&sk, ct)
@@ -442,155 +582,24 @@ fn client_processing(
     messages
 }
 
-fn powers_of_x() {
-    let mut rng = thread_rng();
-    let params = generate_bfv_parameters();
-    let sk = SecretKey::random_with_params(&params, &mut rng);
-    let ek = EvaluationKey::new(&params, &sk, &[0], &[], &[], &mut rng);
-
-    let m = params
-        .plaintext_modulus_op
-        .random_vec(params.degree, &mut rng);
-    let evaluator = Evaluator::new(params);
-    let pt = evaluator.plaintext_encode(&m, Encoding::default());
-    let ct = evaluator.encrypt(&sk, &pt, &mut rng);
-
-    time_it!("Powers of x [1,256) time: ",
-        let placeholder = Ciphertext::placeholder();
-        let mut calculated = vec![placeholder.clone(); 255];
-        calculated[0] = ct;
-        evaluate_powers(&evaluator, &ek, 2, 4, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 4, 8, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 8, 16, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 16, 32, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 32, 64, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 64, 128, &mut calculated, false, &sk);
-        evaluate_powers(&evaluator, &ek, 128, 256, &mut calculated, false, &sk);
-    );
-}
-
-fn call_pvw_decrypt() {
-    let mut rng = thread_rng();
-    let pvw_params = PvwParameters::default();
-    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let pvw_pk = pvw_sk.public_key(&mut rng);
-
-    let params = generate_bfv_parameters();
-    let sk = SecretKey::random_with_params(&params, &mut rng);
-
-    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
-    let clues = (0..params.degree)
-        .into_iter()
-        .map(|_| clue1.clone())
-        .collect_vec();
-
-    let evaluator = Evaluator::new(params);
-
-    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
-
-    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
-
-    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
-
-    time_it!("Pvw Decrypt",
-        let res = pvw_decrypt(
-                &pvw_params,
-                &evaluator,
-                &hint_a,
-                &hint_b,
-                &pvw_sk_cts,
-                ek.get_rtg_ref(1, 0),
-                &sk,
-            );
-    );
-
-    dbg!(evaluator.measure_noise(&sk, &res[0]));
-    dbg!(evaluator.measure_noise(&sk, &res[1]));
-    dbg!(evaluator.measure_noise(&sk, &res[2]));
-    dbg!(evaluator.measure_noise(&sk, &res[3]));
-}
-
-fn call_pvw_decrypt_precomputed() {
-    let mut rng = thread_rng();
-    let pvw_params = PvwParameters::default();
-    let pvw_sk = PvwSecretKey::random(&pvw_params, &mut rng);
-    let pvw_pk = pvw_sk.public_key(&mut rng);
-
-    let params = generate_bfv_parameters();
-    let sk = SecretKey::random_with_params(&params, &mut rng);
-
-    let clue1 = pvw_pk.encrypt(&[0, 0, 0, 0], &mut rng);
-    let clues = (0..params.degree)
-        .into_iter()
-        .map(|_| clue1.clone())
-        .collect_vec();
-
-    let evaluator = Evaluator::new(params);
-
-    let (hint_a, hint_b) = pre_process_batch(&pvw_params, &evaluator, &clues);
-
-    let pvw_sk_cts = encrypt_pvw_sk(&evaluator, &sk, &pvw_sk, &mut rng);
-
-    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[0], &[1], &mut rng);
-
-    println!("Running precomputation...");
-    let precomputed_pvw_sk_cts = pvw_setup(&evaluator, &ek, &pvw_sk_cts);
-
-    println!("Starting decrypt...");
-    time_it!("Pvw Decrypt Precomputed",
-        let _ = pvw_decrypt_precomputed(
-                &pvw_params,
-                &evaluator,
-                &hint_a,
-                &hint_b,
-                &precomputed_pvw_sk_cts,
-                ek.get_rtg_ref(1, 0),
-                &sk,
-            );
-    );
-}
-
-/// Wrapper for setting up necessary things before calling range_fn
-fn call_range_fn_once() {
-    let params = generate_bfv_parameters();
-    let level = 0;
-    let ctx = params.poly_ctx(&PolyType::Q, level);
-
-    let mut rng = thread_rng();
-    let constants = precompute_range_constants(&ctx);
-    let sub_one_precompute = sub_from_one_precompute(&params, level);
-
-    let sk = SecretKey::random_with_params(&params, &mut rng);
-    let mut m = params
-        .plaintext_modulus_op
-        .random_vec(params.degree, &mut rng);
-
-    let evaluator = Evaluator::new(params);
-    let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
-    let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
-
-    // gen evaluation key
-    let ek = EvaluationKey::new(evaluator.params(), &sk, &[0], &[], &[], &mut rng);
-
-    time_it!("Range fn time: ",
-        let _ = range_fn(&ct, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
-    );
-
-    let cts = (0..4).into_iter().map(|_| ct.clone()).collect_vec();
-    time_it!("Range fn 4 times: ",
-        let _ = range_fn_4_times(&cts, &evaluator, &ek, &constants, &sub_one_precompute, &sk);
-    );
-}
-
 fn main() {
-    let threads = 8;
-    // set global thread pool
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(threads)
-        .build_global()
-        .unwrap();
-    // demo();
-    print_pvw_decrypt_precompute_size();
+    let threads = std::env::args().nth(1);
+
+    // set global thread pool using provided thread count
+    if threads.is_some() {
+        let threads = threads
+            .unwrap()
+            .parse::<usize>()
+            .expect("Threads must be a positive integer");
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build_global()
+            .unwrap()
+    }
+
+    demo();
+
+    // print_pvw_decrypt_precompute_size();
     // print_detection_key_size();
     // call_pvw_decrypt();
     // call_pvw_decrypt_precomputed();

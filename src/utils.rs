@@ -26,13 +26,6 @@ use crate::{
     MESSAGE_BYTES,
 };
 
-pub fn read_range_coeffs() -> Vec<u64> {
-    let bytes = include_bytes!("../target/params_850.bin");
-    let mut coeffs = [0u64; 65536];
-    LittleEndian::read_u64_into(bytes, &mut coeffs);
-    coeffs.to_vec()
-}
-
 // Measures time in ms for enclosed code block.
 // Credit: https://github.com/zama-ai/demo_z8z/blob/1f24eeaf006263543062e90f1d1692d381a726cf/src/zqz/utils.rs#L28C1-L42C2
 #[macro_export]
@@ -72,6 +65,13 @@ macro_rules! level_down {
     };
 }
 
+pub fn read_range_coeffs() -> Vec<u64> {
+    let bytes = std::fs::read("./data/params_850.bin").expect("./data/params_850.bin not found");
+    let mut coeffs = [0u64; 65536];
+    LittleEndian::read_u64_into(&bytes, &mut coeffs);
+    coeffs.to_vec()
+}
+
 pub fn store_range_coeffs() {
     let prime = 65537;
     let range = 850;
@@ -88,7 +88,12 @@ pub fn store_range_coeffs() {
     }
     let mut buf = [0u8; 65536 * 8];
     LittleEndian::write_u64_into(&sums, &mut buf);
-    let mut f = std::fs::File::create("params_850.bin").unwrap();
+
+    let output_dir = Path::new("./data");
+    std::fs::create_dir_all(output_dir).expect("Create ./data failed");
+    let mut file_path = PathBuf::from(output_dir);
+    file_path.push("params_850.bin");
+    let mut f = std::fs::File::create(file_path).unwrap();
     f.write_all(&buf).unwrap();
 }
 
@@ -267,7 +272,7 @@ mod tests {
     #[test]
     fn generate_and_store_random_clues() {
         let pvw_params = PvwParameters::default();
-        let mut clues = generate_random_clues(&pvw_params, 2);
+        let mut clues = generate_random_clues(&pvw_params, 1 << 15);
         store_clues(&clues, &pvw_params);
         let mut clues_back = read_clues(&pvw_params);
     }
