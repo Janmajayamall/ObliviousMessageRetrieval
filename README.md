@@ -35,6 +35,9 @@ Before running the program there are a few things to be kept in mind
 4. OMR has high memory requirements. For example, with 16 cores phase 1 consumes around 20GB and phase 2 consumes around 100GB.
    <br></br>
 
+> **Note**
+> To compile you will require protocol buffer compiler version >= 23.4. You can install it from [here](https://grpc.io/docs/protoc-installation/#binary-install)
+
 First run setup
 
 ```
