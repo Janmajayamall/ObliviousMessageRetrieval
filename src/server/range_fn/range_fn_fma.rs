@@ -219,7 +219,7 @@ pub fn optimised_range_fn_fma_hexl(
 mod tests {
     use super::*;
     use crate::utils::{generate_bfv_parameters, precompute_range_constants, read_range_coeffs};
-    use bfv::Encoding;
+    use bfv::{Encoding, PolyCache};
     use rand::thread_rng;
 
     #[test]
@@ -233,7 +233,7 @@ mod tests {
         let sk = SecretKey::random_with_params(&params, &mut rng);
 
         let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
+        let pt = evaluator.plaintext_encode(&m, Encoding::simd(0, PolyCache::Mul(PolyType::Q)));
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
         // change ct representation to Evaluation for plaintext mul
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
@@ -245,9 +245,9 @@ mod tests {
 
         {
             // warmup
-            let mut tmp = evaluator.mul_poly(&ct, pt.poly_ntt_ref());
+            let mut tmp = evaluator.mul_poly(&ct, pt.mul_poly_ref());
             for j in 0..300 {
-                evaluator.add_assign(&mut tmp, &evaluator.mul_poly(&ct, pt.poly_ntt_ref()));
+                evaluator.add_assign(&mut tmp, &evaluator.mul_poly(&ct, pt.mul_poly_ref()));
             }
         }
 
@@ -276,15 +276,15 @@ mod tests {
             .map(|i| {
                 let c = range_coeffs[i];
                 let m = vec![c; ctx.degree()];
-                evaluator.plaintext_encode(&m, Encoding::simd(ct.level()))
+                evaluator.plaintext_encode(&m, Encoding::simd(0, PolyCache::Mul(PolyType::Q)))
             })
             .collect_vec();
         let now = std::time::Instant::now();
-        let mut res_unopt = evaluator.mul_poly(&ct, pts[2].poly_ntt_ref());
+        let mut res_unopt = evaluator.mul_poly(&ct, pts[2].mul_poly_ref());
         for j in (4..257).step_by(2) {
             evaluator.add_assign(
                 &mut res_unopt,
-                &evaluator.mul_poly(&ct, pts[j - 1].poly_ntt_ref()),
+                &evaluator.mul_poly(&ct, pts[j - 1].mul_poly_ref()),
             );
         }
         let time_unopt = now.elapsed();

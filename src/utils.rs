@@ -1,6 +1,6 @@
 use bfv::{
     BfvParameters, Ciphertext, Encoding, Evaluator, Modulus, PolyContext, RelinearizationKey,
-    SecretKey, TryFromWithParameters,
+    SecretKey,
 };
 use byteorder::{ByteOrder, LittleEndian};
 use bytes::Bytes;
@@ -19,6 +19,7 @@ use std::{
     io::{BufReader, Read, Write},
     path::{Path, PathBuf},
 };
+use traits::TryFromWithParameters;
 use walkdir::{DirEntry, WalkDir};
 
 use crate::{

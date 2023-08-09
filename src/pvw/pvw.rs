@@ -1,5 +1,5 @@
 use super::PvwCiphertextProto;
-use bfv::{convert_from_bytes, convert_to_bytes, Modulus, TryFromWithParameters};
+use bfv::{convert_from_bytes, convert_to_bytes, Modulus};
 use itertools::{izip, Itertools};
 use ndarray::{Array, Array1, Array2, Axis};
 use rand::{
@@ -8,6 +8,7 @@ use rand::{
 };
 use rand_chacha::ChaChaRng;
 use statrs::distribution::Normal;
+use traits::TryFromWithParameters;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PvwParameters {

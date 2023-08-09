@@ -1,5 +1,8 @@
 use crate::pvw::{PvwCiphertext, PvwParameters};
-use bfv::{BfvParameters, Encoding, Evaluator, Modulus, Plaintext, Poly, Representation};
+use bfv::{
+    BfvParameters, Encoding, Evaluator, Modulus, Plaintext, Poly, PolyCache, PolyType,
+    Representation,
+};
 use rand::{distributions::Uniform, CryptoRng, Rng, RngCore, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -7,7 +10,7 @@ pub fn pre_process_batch(
     pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hints: &[PvwCiphertext],
-) -> (Vec<Plaintext>, Vec<Poly>) {
+) -> (Vec<Plaintext>, Vec<Plaintext>) {
     // can only process as many as polynomial_degree hints in a batch
     assert!(hints.len() <= evaluator.params().degree);
 
@@ -23,10 +26,11 @@ pub fn pre_process_batch(
                 m.push(0);
             }
         }
-        hint_a_pts.push(evaluator.plaintext_encode(&m, Encoding::default()));
+        hint_a_pts
+            .push(evaluator.plaintext_encode(&m, Encoding::simd(0, PolyCache::Mul(PolyType::Q))));
     }
 
-    let mut hint_b_polys = vec![];
+    let mut hint_b_pts = vec![];
     let q_by4 = evaluator.params().plaintext_modulus / 4;
     for i in 0..pvw_params.ell {
         let mut m = vec![];
@@ -38,15 +42,14 @@ pub fn pre_process_batch(
                     .sub_mod_fast(hints[j].b[i], q_by4),
             );
         }
-        hint_b_polys.push(
-            evaluator
-                .plaintext_encode(&m, Encoding::default())
-                .to_poly(evaluator.params(), Representation::Evaluation),
-        );
+        hint_b_pts.push(evaluator.plaintext_encode(
+            &m,
+            Encoding::simd(0, PolyCache::AddSub(Representation::Evaluation)),
+        ));
     }
 
     // length of plaintexts will be sec_len
-    (hint_a_pts, hint_b_polys)
+    (hint_a_pts, hint_b_pts)
 }
 
 /// Returns plaintexts to extract blocks of extract_size.
@@ -76,7 +79,9 @@ pub fn procompute_expand_roll_pt(
                 m.push(0);
             }
         }
-        pts.push(evaluator.plaintext_encode(&m, Encoding::simd(level)));
+        pts.push(
+            evaluator.plaintext_encode(&m, Encoding::simd(level, PolyCache::Mul(PolyType::Q))),
+        );
     }
     pts
 }
@@ -94,7 +99,9 @@ pub fn precompute_expand_32_roll_pt(
         for j in (32 * i)..(32 * (i + 1)) {
             m[j] = 1u64;
         }
-        pts.push(evaluator.plaintext_encode(&m, Encoding::simd(level)));
+        pts.push(
+            evaluator.plaintext_encode(&m, Encoding::simd(level, PolyCache::Mul(PolyType::Q))),
+        );
     }
 
     pts
@@ -122,8 +129,8 @@ pub fn precompute_indices_pts(
             let row = i / 16;
             m[row] = 1 << col;
             evaluator
-                .plaintext_encode(&m, Encoding::simd(level))
-                .move_poly_ntt()
+                .plaintext_encode(&m, Encoding::simd(level, PolyCache::Mul(PolyType::Q)))
+                .move_mul_poly()
         })
         .collect()
 }
@@ -168,8 +175,8 @@ pub fn compute_weight_pts(
             }
 
             evaluator
-                .plaintext_encode(&m, Encoding::simd(level))
-                .move_poly_ntt()
+                .plaintext_encode(&m, Encoding::simd(level, PolyCache::Mul(PolyType::Q)))
+                .move_mul_poly()
         })
         .collect()
 }

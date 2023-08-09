@@ -104,7 +104,7 @@ pub fn pv_expand_batch(
     let mut ones = vec![];
     pts_32.iter().enumerate().for_each(|(batch_index, pt_32)| {
         // dbg!(pv_ct.level(), pt_32.encoding.as_ref().unwrap().level);
-        let mut r32_ct = evaluator.mul_poly(pv_ct, pt_32.poly_ntt_ref());
+        let mut r32_ct = evaluator.mul_poly(pv_ct, pt_32.mul_poly_ref());
 
         // populate 32 across all lanes
         let mut i = 32;
@@ -120,7 +120,7 @@ pub fn pv_expand_batch(
         // extract sets of 4
         let mut fours = vec![];
         for i in 0..8 {
-            fours.push(evaluator.mul_poly(&r32_ct, pts_4_roll[i].poly_ntt_ref()));
+            fours.push(evaluator.mul_poly(&r32_ct, pts_4_roll[i].mul_poly_ref()));
         }
 
         // expand each set of 4 across all lanes
@@ -138,7 +138,7 @@ pub fn pv_expand_batch(
         for i in 0..8 {
             let four = &fours[i];
             for j in 0..4 {
-                ones.push(evaluator.mul_poly(four, pts_1_roll[j].poly_ntt_ref()));
+                ones.push(evaluator.mul_poly(four, pts_1_roll[j].mul_poly_ref()));
             }
         }
 
@@ -392,7 +392,7 @@ mod tests {
 
         let mut level = 0;
 
-        let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
         level = 12;

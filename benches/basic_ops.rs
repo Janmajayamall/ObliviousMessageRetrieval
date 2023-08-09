@@ -1,7 +1,4 @@
-use bfv::{
-    Encoding, Evaluator, Modulus,
-    PolyType, Representation, SecretKey,
-};
+use bfv::{Encoding, Evaluator, Modulus, PolyCache, PolyType, Representation, SecretKey};
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use itertools::{izip, Itertools};
 use ndarray::Array2;
@@ -9,7 +6,7 @@ use omr::{
     optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_vec, optimised_poly_fma},
     utils::generate_bfv_parameters,
 };
-use rand::{thread_rng};
+use rand::thread_rng;
 
 fn bench(c: &mut Criterion) {
     let mut group = c.benchmark_group("basic-ops");
@@ -24,7 +21,7 @@ fn bench(c: &mut Criterion) {
     let sk = SecretKey::random_with_params(&params, &mut rng);
 
     let evaluator = Evaluator::new(params);
-    let pt = evaluator.plaintext_encode(&m, Encoding::default());
+    let pt = evaluator.plaintext_encode(&m, Encoding::simd(0, PolyCache::Mul(PolyType::Q)));
     let mut ct0 = evaluator.encrypt(&sk, &pt, &mut rng);
     evaluator.ciphertext_change_representation(&mut ct0, Representation::Evaluation);
 
@@ -37,7 +34,7 @@ fn bench(c: &mut Criterion) {
         .collect_vec();
 
     // optimised
-    let polys = vec![pt.poly_ntt_ref().clone(); 256];
+    let polys = vec![pt.mul_poly_ref().clone(); 256];
     group.bench_function("optimised_fma", |b| {
         b.iter(|| {
             let ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);

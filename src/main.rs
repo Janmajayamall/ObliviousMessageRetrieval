@@ -1,6 +1,6 @@
 use bfv::{
     Ciphertext, CiphertextProto, Encoding, EvaluationKey, EvaluationKeyProto, Evaluator, Plaintext,
-    Poly, PolyType, Representation, SecretKey, TryFromWithParameters,
+    Poly, PolyType, Representation, SecretKey,
 };
 use itertools::Itertools;
 use ndarray::Array2;
@@ -30,6 +30,7 @@ use omr::{
 };
 use prost::Message;
 use rand::{thread_rng, Rng};
+use traits::TryFromWithParameters;
 
 // Functions to check runtime of expensive components //
 
@@ -157,7 +158,7 @@ fn call_range_fn_once() {
         .random_vec(params.degree, &mut rng);
 
     let evaluator = Evaluator::new(params);
-    let pt = evaluator.plaintext_encode(&m, Encoding::simd(level));
+    let pt = evaluator.plaintext_encode(&m, Encoding::default());
     let ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
     // gen evaluation key
@@ -416,7 +417,7 @@ fn phase1(
     evaluator: &Evaluator,
     pvw_params: &PvwParameters,
     precomp_hint_a: &[Plaintext],
-    precomp_hint_b: &[Poly],
+    precomp_hint_b: &[Plaintext],
     precomp_range_constants: &Array2<u64>,
     precomp_sub_from_one: &[u64],
     ek: &EvaluationKey,

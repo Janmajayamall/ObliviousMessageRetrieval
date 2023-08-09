@@ -84,12 +84,12 @@ pub fn optimised_pvw_fma_with_rot(
     // To repeatedly rotate `s` and set output to `s`, `s` must be mutable, however the function
     // only takes `s` as a reference. Changing to mutable reference is unecessary after realising that
     // `rotate` also takes `s` as a reference. Hence, we process the first iteration outside the loop.
-    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].poly_ntt_ref());
-    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].poly_ntt_ref());
+    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].mul_poly_ref());
+    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].mul_poly_ref());
     let mut s = rtg.rotate(s, params);
     for i in 1..sec_len {
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].mul_poly_ref());
+        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].mul_poly_ref());
         s = rtg.rotate(&s, params);
     }
     (d_u128, d1_u128)
@@ -114,7 +114,7 @@ pub fn pvw_decrypt(
     pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hint_a_pts: &[Plaintext],
-    hint_b_pts: &[Poly],
+    hint_b_pts: &[Plaintext],
     pvw_sk_cts: &[Ciphertext],
     rtg: &GaloisKey,
     sk: &SecretKey,
@@ -142,7 +142,7 @@ pub fn pvw_decrypt(
         .collect_into_vec(&mut sk_a);
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
-        evaluator.sub_ciphertext_from_poly_inplace(sa, b);
+        evaluator.sub_ciphertext_from_poly_inplace(sa, b.add_sub_poly_ref());
     });
 
     sk_a
@@ -198,7 +198,7 @@ pub fn pvw_decrypt_precomputed(
     pvw_params: &PvwParameters,
     evaluator: &Evaluator,
     hint_a_pts: &[Plaintext],
-    hint_b_pts: &[Poly],
+    hint_b_pts: &[Plaintext],
     precomputed_pvw_sk_cts: &[Vec<Ciphertext>],
     rtg: &GaloisKey,
     sk: &SecretKey,
@@ -245,7 +245,7 @@ pub fn pvw_decrypt_precomputed(
 
     sk_a.iter_mut().zip(hint_b_pts.iter()).for_each(|(sa, b)| {
         // b - s0
-        evaluator.sub_ciphertext_from_poly_inplace(sa, b);
+        evaluator.sub_ciphertext_from_poly_inplace(sa, b.add_sub_poly_ref());
     });
 
     sk_a

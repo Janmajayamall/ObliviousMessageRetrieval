@@ -33,7 +33,7 @@ pub fn encrypt_pvw_sk<R: CryptoRng + RngCore>(
                 }
             }
 
-            let pt = evaluator.plaintext_encode(&m, Encoding::simd(0));
+            let pt = evaluator.plaintext_encode(&m, Encoding::default());
             let mut ct = evaluator.encrypt(bfv_sk, &pt, rng);
             evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
             ct

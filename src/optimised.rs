@@ -152,13 +152,13 @@ pub fn optimised_pvw_fma_with_rot(
     // To repeatedly rotate `s` and set output to `s`, `s` must be Ciphertext<T> not its reference.
     // To avoid having to me `s` in function params Ciphertext<T> we perform first plaintext mul
     // outside loop and then set a new `s` after rotating `s` passed in function.
-    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].poly_ntt_ref());
-    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].poly_ntt_ref());
+    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].mul_poly_ref());
+    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].mul_poly_ref());
     let mut s = rtg.rotate(s, params);
     for i in 1..sec_len {
         // dbg!(i);
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].mul_poly_ref());
+        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].mul_poly_ref());
         s = rtg.rotate(&s, params);
 
         // {
@@ -184,8 +184,8 @@ pub fn optimised_pvw_fma(
     let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
     for i in 0..sec_len {
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].poly_ntt_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].poly_ntt_ref());
+        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].mul_poly_ref());
+        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].mul_poly_ref());
     }
 
     coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level())
@@ -219,7 +219,7 @@ pub fn optimised_poly_fma(
 
 #[cfg(test)]
 mod tests {
-    use bfv::Evaluator;
+    use bfv::{Evaluator, PolyCache};
     use statrs::function::evaluate;
 
     use crate::utils::{generate_bfv_parameters, precompute_range_constants, read_range_coeffs};
@@ -241,7 +241,7 @@ mod tests {
 
         let evaluator = Evaluator::new(params);
         let pt0 = evaluator.plaintext_encode(&m0, Encoding::default());
-        let pt1 = evaluator.plaintext_encode(&m1, Encoding::default());
+        let pt1 = evaluator.plaintext_encode(&m1, Encoding::simd(0, PolyCache::Mul(PolyType::Q)));
 
         let mut ct = evaluator.encrypt(&sk, &pt0, &mut rng);
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
@@ -259,9 +259,9 @@ mod tests {
 
         // unoptimised fma
         let now = std::time::Instant::now();
-        let mut res_unopt = evaluator.mul_poly(&ct, pt_vec[0].poly_ntt_ref());
+        let mut res_unopt = evaluator.mul_poly(&ct, pt_vec[0].mul_poly_ref());
         pt_vec.iter().skip(1).for_each(|p0| {
-            evaluator.fma_poly(&mut res_unopt, &ct, p0.poly_ntt_ref());
+            evaluator.fma_poly(&mut res_unopt, &ct, p0.mul_poly_ref());
         });
         println!("time un-optimised: {:?}", now.elapsed());
 
