@@ -21,10 +21,10 @@ walkdir = "2.3.3"
 traits = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev"}
 
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
-bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev", default-features = false, features = ["std", "serialize"]}
+bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "main", default-features = false, features = ["std", "serialize"]}
 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
-bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev", default-features = false, features = ["hexl-ntt", "hexl", "serialize"]}
+bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "main", default-features = false, features = ["hexl-ntt", "hexl", "serialize"]}
 hexl-rs = {git = "https://github.com/Janmajayamall/hexl-rs.git"}
 
 [build-dependencies]

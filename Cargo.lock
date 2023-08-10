@@ -58,7 +58,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "bfv"
 version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=main#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
 dependencies = [
  "concrete-ntt",
  "crypto-bigint",
@@ -73,7 +73,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "seq-macro",
- "traits",
+ "traits 0.1.0 (git+https://github.com/Janmajayamall/bfv.git?branch=main)",
 ]
 
 [[package]]
@@ -750,7 +750,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "statrs",
- "traits",
+ "traits 0.1.0 (git+https://github.com/Janmajayamall/bfv.git?branch=dev)",
  "walkdir",
 ]
 
@@ -1216,6 +1216,11 @@ dependencies = [
 name = "traits"
 version = "0.1.0"
 source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
+
+[[package]]
+name = "traits"
+version = "0.1.0"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=main#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
 
 [[package]]
 name = "typenum"
