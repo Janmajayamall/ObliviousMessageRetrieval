@@ -73,7 +73,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "seq-macro",
- "traits 0.1.0 (git+https://github.com/Janmajayamall/bfv.git?branch=main)",
+ "traits",
 ]
 
 [[package]]
@@ -750,7 +750,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "statrs",
- "traits 0.1.0 (git+https://github.com/Janmajayamall/bfv.git?branch=dev)",
+ "traits",
  "walkdir",
 ]
 
@@ -1211,11 +1211,6 @@ dependencies = [
  "serde",
  "serde_json",
 ]
-
-[[package]]
-name = "traits"
-version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
 
 [[package]]
 name = "traits"
