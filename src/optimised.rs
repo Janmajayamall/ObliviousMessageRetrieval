@@ -131,80 +131,6 @@ pub fn fma_reverse_u128_poly(d: &mut Array2<u128>, s: &Poly, h: &Poly) {
     });
 }
 
-/// Instead of reading pre-computated rotations from disk this fn rotates `s` which is
-/// more expensive than reading them from disk.
-pub fn optimised_pvw_fma_with_rot(
-    params: &BfvParameters,
-    s: &Ciphertext,
-    hint_a_pts: &[Plaintext],
-    sec_len: usize,
-    rtg: &GaloisKey,
-    sk: &SecretKey,
-) -> Ciphertext {
-    // only works and sec_len <= 512 otherwise overflows
-    debug_assert!(sec_len <= 512);
-
-    // let mut d = Poly::zero(&ctx, &Representation::Evaluation);
-    let shape = s.c_ref()[0].coefficients().shape();
-    let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
-    let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
-
-    // To repeatedly rotate `s` and set output to `s`, `s` must be Ciphertext<T> not its reference.
-    // To avoid having to me `s` in function params Ciphertext<T> we perform first plaintext mul
-    // outside loop and then set a new `s` after rotating `s` passed in function.
-    fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[0].mul_poly_ref());
-    fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[0].mul_poly_ref());
-    let mut s = rtg.rotate(s, params);
-    for i in 1..sec_len {
-        // dbg!(i);
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].mul_poly_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].mul_poly_ref());
-        s = rtg.rotate(&s, params);
-
-        // {
-        //     let mut rng = thread_rng();
-        //     dbg!(sk.measure_noise(&s, &mut rng));
-        // }
-    }
-    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level())
-}
-
-/// Modify this to accept `s` and `hints_pts` as array of file locations instead of ciphertexts.
-/// I don't want to read all 512 rotations of `s` in memory at once since each ciphertext is huge.
-pub fn optimised_pvw_fma(
-    params: &BfvParameters,
-    s: &Ciphertext,
-    hint_a_pts: &[Plaintext],
-    sec_len: usize,
-) -> Ciphertext {
-    // only works and sec_len <= 512 otherwise overflows
-    debug_assert!(sec_len <= 512);
-
-    let shape = s.c_ref()[0].coefficients().shape();
-    let mut d_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
-    let mut d1_u128 = ndarray::Array2::<u128>::zeros((shape[0], shape[1]));
-    for i in 0..sec_len {
-        fma_reverse_u128_poly(&mut d_u128, &s.c_ref()[0], hint_a_pts[i].mul_poly_ref());
-        fma_reverse_u128_poly(&mut d1_u128, &s.c_ref()[1], hint_a_pts[i].mul_poly_ref());
-    }
-
-    coefficient_u128_to_ciphertext(params, &d_u128, &d1_u128, s.level())
-}
-
-pub fn add_u128(r: &mut [u128], a: &[u64]) {
-    r.iter_mut().zip(a.iter()).for_each(|(r0, a0)| {
-        *r0 += *a0 as u128;
-    })
-}
-
-/// A lot slower than naively adding ciphertexts because u128 additions are
-/// lot more expensive than 1 u64 add + 1 u64 cmp (atleast on m1).
-pub fn optimised_add_range_fn(res: &mut Array2<u128>, p: &Poly) {
-    azip!(res.outer_iter_mut(), p.coefficients().outer_iter(),).for_each(|mut r, a| {
-        add_u128(r.as_slice_mut().unwrap(), a.as_slice().unwrap());
-    });
-}
-
 pub fn optimised_poly_fma(
     cts: &[Ciphertext],
     polys: &[Poly],
@@ -225,122 +151,6 @@ mod tests {
     use crate::utils::{generate_bfv_parameters, precompute_range_constants, read_range_coeffs};
 
     use super::*;
-
-    #[test]
-    fn optimised_pvw_fma_works() {
-        let mut rng = thread_rng();
-        let params = generate_bfv_parameters();
-        let sk = SecretKey::random_with_params(&params, &mut rng);
-
-        let mut m0 = params
-            .plaintext_modulus_op
-            .random_vec(params.degree, &mut rng);
-        let mut m1 = params
-            .plaintext_modulus_op
-            .random_vec(params.degree, &mut rng);
-
-        let evaluator = Evaluator::new(params);
-        let pt0 = evaluator.plaintext_encode(&m0, Encoding::default());
-        let pt1 = evaluator.plaintext_encode(&m1, Encoding::simd(0, PolyCache::Mul(PolyType::Q)));
-
-        let mut ct = evaluator.encrypt(&sk, &pt0, &mut rng);
-        evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);
-
-        let pt_vec = vec![pt1; 512];
-
-        // warmup
-        (0..4).for_each(|_| {
-            optimised_pvw_fma(evaluator.params(), &ct, &pt_vec, pt_vec.len());
-        });
-
-        let now = std::time::Instant::now();
-        let res_opt = optimised_pvw_fma(evaluator.params(), &ct, &pt_vec, pt_vec.len());
-        println!("time optimised: {:?}", now.elapsed());
-
-        // unoptimised fma
-        let now = std::time::Instant::now();
-        let mut res_unopt = evaluator.mul_poly(&ct, pt_vec[0].mul_poly_ref());
-        pt_vec.iter().skip(1).for_each(|p0| {
-            evaluator.fma_poly(&mut res_unopt, &ct, p0.mul_poly_ref());
-        });
-        println!("time un-optimised: {:?}", now.elapsed());
-
-        println!(
-            "Noise: optimised={} un-optimised={}",
-            evaluator.measure_noise(&sk, &res_opt),
-            evaluator.measure_noise(&sk, &res_unopt)
-        );
-
-        let v = evaluator.plaintext_decode(&evaluator.decrypt(&sk, &res_opt), Encoding::default());
-        let v2 =
-            evaluator.plaintext_decode(&evaluator.decrypt(&sk, &res_unopt), Encoding::default());
-
-        evaluator
-            .params()
-            .plaintext_modulus_op
-            .mul_mod_fast_vec(&mut m0, &m1);
-        evaluator
-            .params()
-            .plaintext_modulus_op
-            .scalar_mul_mod_fast_vec(&mut m0, pt_vec.len() as u64);
-
-        assert_eq!(v, m0);
-        assert_eq!(v, v2);
-    }
-
-    #[test]
-    fn optimised_add_range_fn_works() {
-        let params = generate_bfv_parameters();
-        let mut rng = thread_rng();
-        let m = params
-            .plaintext_modulus_op
-            .random_vec(params.degree, &mut rng);
-        let sk = SecretKey::random_with_params(&params, &mut rng);
-
-        let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::default());
-
-        let cts = (0..256)
-            .map(|_| evaluator.encrypt(&sk, &pt, &mut rng))
-            .collect_vec();
-
-        {
-            // warm up
-            for _ in 0..2 {
-                let mut dummy_res = cts[0].clone();
-                cts.iter().skip(1).for_each(|c| {
-                    evaluator.add(&mut dummy_res, c);
-                });
-            }
-        }
-
-        // unoptimised ciphertext additions
-        let now = std::time::Instant::now();
-        let mut res_unopt = cts[0].clone();
-        cts.iter().skip(1).for_each(|c| {
-            evaluator.add(&mut res_unopt, c);
-        });
-        let time_unopt = now.elapsed();
-
-        // optimised ciphertext additions
-        let now = std::time::Instant::now();
-        let q_ctx = evaluator.params().poly_ctx(&PolyType::Q, 0);
-        let mut r0 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
-        let mut r1 = Array2::<u128>::zeros((q_ctx.moduli_count(), q_ctx.degree()));
-        cts.iter().for_each(|c| {
-            optimised_add_range_fn(&mut r0, &c.c_ref()[0]);
-            optimised_add_range_fn(&mut r1, &c.c_ref()[1]);
-        });
-        let res_opt = coefficient_u128_to_ciphertext(evaluator.params(), &r0, &r1, 0);
-        let time_opt = now.elapsed();
-
-        println!("Time: Opt={:?}, UnOpt={:?}", time_opt, time_unopt);
-        println!(
-            "Noise: Opt={:?}, UnOpt={:?}",
-            evaluator.measure_noise(&sk, &res_opt),
-            evaluator.measure_noise(&sk, &res_unopt)
-        );
-    }
 
     #[test]
     fn sub_from_one_works() {
@@ -370,11 +180,12 @@ mod tests {
         sub_from_one(evaluator.params(), &mut ct, &precomputes);
         let time_opt = now.elapsed();
 
-        let pt =
-            evaluator.plaintext_encode(&vec![1; evaluator.params().degree], Encoding::default());
-        let poly = pt.to_poly(evaluator.params(), Representation::Coefficient);
+        let pt = evaluator.plaintext_encode(
+            &vec![1; evaluator.params().degree],
+            Encoding::simd(0, PolyCache::AddSub(Representation::Coefficient)),
+        );
         let now = std::time::Instant::now();
-        evaluator.sub_ciphertext_from_poly_inplace(&mut ct_clone, &poly);
+        evaluator.sub_ciphertext_from_poly_inplace(&mut ct_clone, &pt.add_sub_poly_ref());
         let time_unopt = now.elapsed();
 
         println!("Time: Opt={:?}, UnOpt={:?}", time_opt, time_unopt);

@@ -389,7 +389,7 @@ mod tests {
             .random_vec(params.degree, &mut rng);
 
         let evaluator = Evaluator::new(params);
-        let pt = evaluator.plaintext_encode(&m, Encoding::simd(0));
+        let pt = evaluator.plaintext_encode(&m, Encoding::default());
         let mut ct = evaluator.encrypt(&sk, &pt, &mut rng);
 
         evaluator.ciphertext_change_representation(&mut ct, Representation::Evaluation);

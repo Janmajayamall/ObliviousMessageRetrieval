@@ -1,7 +1,7 @@
 use crate::optimised::{coefficient_u128_to_ciphertext, fma_reverse_u128_poly};
 use crate::preprocessing::{precompute_expand_32_roll_pt, procompute_expand_roll_pt};
 use crate::{
-    optimised::{barret_reduce_coefficients_u128, optimised_pvw_fma_with_rot, sub_from_one},
+    optimised::{barret_reduce_coefficients_u128, sub_from_one},
     pvw::PvwParameters,
 };
 use bfv::{

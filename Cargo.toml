@@ -18,7 +18,7 @@ rayon = "1.7.0"
 prost = "0.11"
 bytes = "1.4.0"
 walkdir = "2.3.3"
-traits = {path = "./../bfv/traits"}
+traits = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev"}
 
 [target.'cfg(not(target_arch = "x86_64"))'.dependencies]
 bfv = {git = "https://github.com/Janmajayamall/bfv.git", branch = "dev", default-features = false, features = ["std", "serialize"]}

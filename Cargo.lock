@@ -4,9 +4,9 @@ version = 3
 
 [[package]]
 name = "aho-corasick"
-version = "1.0.2"
+version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43f6cb1bf222025340178f382c426f13757b2960e89779dfcb319c32542a5a41"
+checksum = "86b8f9420f797f2d9e935edf629310eb938a0d839f984e25327f3c7eed22300c"
 dependencies = [
  "memchr",
 ]
@@ -58,7 +58,7 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "bfv"
 version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3cceedc5e93a19dae771ec92b3e4b2393ed0920c"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
 dependencies = [
  "concrete-ntt",
  "crypto-bigint",
@@ -73,7 +73,7 @@ dependencies = [
  "rand",
  "rand_chacha",
  "seq-macro",
- "traits 0.1.0 (git+https://github.com/Janmajayamall/bfv.git?branch=dev)",
+ "traits",
 ]
 
 [[package]]
@@ -750,7 +750,7 @@ dependencies = [
  "rand_chacha",
  "rayon",
  "statrs",
- "traits 0.1.0",
+ "traits",
  "walkdir",
 ]
 
@@ -1215,11 +1215,7 @@ dependencies = [
 [[package]]
 name = "traits"
 version = "0.1.0"
-
-[[package]]
-name = "traits"
-version = "0.1.0"
-source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3cceedc5e93a19dae771ec92b3e4b2393ed0920c"
+source = "git+https://github.com/Janmajayamall/bfv.git?branch=dev#3de3c56b440b38e5035fc6ca6afb7c18cb0429b8"
 
 [[package]]
 name = "typenum"
